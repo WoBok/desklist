@@ -754,7 +754,7 @@ select.sel:hover{border-color:#D5D2C8}
     </div>
     <div class="hr op" id="hr"></div>
     <div class="scroll" id="scroll"><ul class="list" id="list"></ul><div class="spacer" id="spacer"></div></div>
-    <button class="add op" data-act="add" id="add"><span class="plus" id="addPlus"></span><span>新增一条</span></button>
+    <button class="add op" data-act="add" id="add"><span class="plus" id="addPlus"></span><span id="addTxt"></span></button>
     <div class="folds op" id="folds"></div>
     <div class="hint hint-t" id="hintT"></div>
     <div class="hint hint-b" id="hintB"></div>
@@ -766,13 +766,13 @@ select.sel:hover{border-color:#D5D2C8}
   <div class="panel" id="panel">
     <div class="pbox">
       <div class="phead" id="phead">
-        <h2>设置</h2>
+        <h2 id="setTitle"></h2>
         <span class="sp"></span>
         <button class="pclose" data-act="closeSettings" id="pclose"></button>
       </div>
       <div class="pbody" id="pbody"></div>
       <div class="pfoot">
-        <button data-act="resetPrefs">恢复默认</button>
+        <button data-act="resetPrefs" id="resetBtn"></button>
         <span class="sp"></span>
         <span class="ver"><span class="auth">WoBok</span> · Desk List <span id="verNum">1.5.5</span></span>
       </div>
@@ -787,6 +787,109 @@ const listen = (ev, cb) => HAS_T ? window.__TAURI__.event.listen(ev, e => cb(e.p
 /* 抓现场：前端任何未捕获错误都写进 %TEMP%\desklist.log */
 window.addEventListener("error", e => invoke("dbg", { msg: `${e.message} @${e.lineno}:${e.colno}` }));
 window.addEventListener("unhandledrejection", e => invoke("dbg", { msg: "REJ " + (e.reason && e.reason.message || e.reason) }));
+
+
+/* ═══════════ 语言 ═══════════
+   所有界面文案集中在这一张表里：加一门语言只加一列，
+   不要在各处散写三元判断，也不要让 Rust 和前端各存一份。
+   语言来源 = prefs.lang（auto / zh / en）；auto 时跟随系统。 */
+const I18N = {
+  zh: {
+    addItem:"新增一条", newTab:"新建", settingsTitle:"设置", resetPrefs:"恢复默认",
+    checkTip:"勾掉", editTip:"点一下改这条", emptyList:"这里还没有待办",
+    draftPh:"写点什么…", done:"已完成", archived:"已归档",
+    clear:"清空", restoreAll:"全部恢复", restore:"恢复", del:"删除",
+    noDone:"还没有勾掉的事", noArch:"没有归档的分类", more:"还有 {n} 条",
+    rename:"重命名", renameHint:"双击 Tab 也可以",
+    archiveCat:"归档此分类", archiveHint:"可逆，收进「已归档」随时恢复",
+    delCat:"删除此分类", delHint:"不可逆，需要确认",
+    delTitle:"删除「{name}」？", delTitleHard:"彻底删除「{name}」？",
+    tallyCats:"这个分类里还有 {todo} 条未完成、{done} 条已完成。",
+    tallyArch:"这个归档分类里还有 {todo} 条未完成、{done} 条已完成。",
+    delBody:"{tally}删除会连它们一起丢掉，不能撤销。如果只是暂时不想看，改成归档效果一样，而且随时能恢复。",
+    delBodyHard:"{tally}删除会把它们一起丢掉，不能撤销。",
+    cancel:"取消", archiveInstead:"改为归档",
+    newCatName:"新分类", uncategorized:"未分类",
+    hotkeyUnset:"未设置", pressCombo:"按下组合键…",
+    needMod:"至少要有一个 Ctrl / Alt / Shift",
+    hkTaken:"这个组合被系统或其他程序占用了，换一个",
+    secLang:"语言", langLabel:"界面语言", langHint:"默认跟随系统",
+    langAuto:"跟随系统",
+    secText:"待办文字", font:"字体", fontHint:"只影响事项文字，界面本身不变",
+    fontSystem:"系统默认", fontYahei:"微软雅黑", fontDengxian:"等线", fontSarasa:"更纱黑体",
+    size:"字号", sizeHint:"只缩放待办文字",
+    sSmall:"小", sStd:"标准", sLarge:"大", sXL:"特大",
+    weight:"字重", wReg:"常规", wMed:"中黑", wBold:"加粗",
+    italic:"斜体", ink:"文字颜色", inkHint:"仅「未唤起 + 通透」时生效，其余保持墨色",
+    custom:"自定义",
+    secIdle:"贴合态", idleBacking:"未唤起底衬", idleHint:"贴在桌面上、没碰它时的样子",
+    cWhite:"纯白", cPaper:"纸白", cNone:"通透", cVeil:"半透",
+    wakeBacking:"唤醒时底衬", wakeHint:"按住 Ctrl 且指针在卡片上时浮起的一层",
+    halo:"文字光晕", haloHint:"仅「未唤起 + 通透」时生效", haloColor:"光晕颜色",
+    secLook:"外观", tone:"卡片底色", toneHint:"置顶态用",
+    ring:"聚焦外发光", ringHint:"置顶态点中卡片时亮一圈",
+    maxH:"高度上限", maxHHint:"超出后清单内部滚动",
+    secKeys:"快捷键", hkPin:"置顶 / 贴回桌面", hkPinHint:"点一下再按新的组合",
+    hkAdd:"直接新建一条",
+    secBehaviour:"行为", autostart:"开机自动启动", autostartHint:"登录后静默贴到桌面",
+    backToDesktop:"贴回桌面", backHint:"置顶态下按一下就行"
+  },
+  en: {
+    addItem:"Add item", newTab:"New", settingsTitle:"Settings", resetPrefs:"Reset",
+    checkTip:"Mark as done", editTip:"Click to edit", emptyList:"No items yet",
+    draftPh:"Write something…", done:"Done", archived:"Archived",
+    clear:"Clear", restoreAll:"Restore all", restore:"Restore", del:"Delete",
+    noDone:"Nothing completed yet", noArch:"No archived categories", more:"{n} more",
+    rename:"Rename", renameHint:"Or double-click the tab",
+    archiveCat:"Archive category", archiveHint:"Reversible — restore it any time",
+    delCat:"Delete category", delHint:"Permanent — asks first",
+    delTitle:"Delete “{name}”?", delTitleHard:"Permanently delete “{name}”?",
+    tallyCats:"This category still has {todo} open and {done} completed items. ",
+    tallyArch:"This archived category still has {todo} open and {done} completed items. ",
+    delBody:"{tally}They will be removed with it. This cannot be undone. If you only want it out of the way, archive it instead — you can restore it any time.",
+    delBodyHard:"{tally}They will be removed with it. This cannot be undone.",
+    cancel:"Cancel", archiveInstead:"Archive instead",
+    newCatName:"New category", uncategorized:"Uncategorized",
+    hotkeyUnset:"Not set", pressCombo:"Press keys…",
+    needMod:"Include at least one of Ctrl / Alt / Shift",
+    hkTaken:"That combination is already taken — try another",
+    secLang:"Language", langLabel:"Interface language", langHint:"Follows the system by default",
+    langAuto:"System",
+    secText:"Item text", font:"Font", fontHint:"Item text only — the interface stays as is",
+    fontSystem:"System default", fontYahei:"Microsoft YaHei", fontDengxian:"DengXian", fontSarasa:"Sarasa Gothic",
+    size:"Size", sizeHint:"Scales item text only",
+    sSmall:"Small", sStd:"Normal", sLarge:"Large", sXL:"X-Large",
+    weight:"Weight", wReg:"Regular", wMed:"Medium", wBold:"Bold",
+    italic:"Italic", ink:"Text colour", inkHint:"Only when idle and see-through; otherwise ink",
+    custom:"Custom",
+    secIdle:"On the desktop", idleBacking:"Backing when idle", idleHint:"How it looks while resting on the desktop",
+    cWhite:"White", cPaper:"Paper", cNone:"None", cVeil:"Veil",
+    wakeBacking:"Backing when awake", wakeHint:"The layer that rises while Ctrl is held over the card",
+    halo:"Text halo", haloHint:"Only when idle and see-through", haloColor:"Halo colour",
+    secLook:"Appearance", tone:"Card colour", toneHint:"Used when pinned",
+    ring:"Focus glow", ringHint:"Lights up when the pinned card is clicked",
+    maxH:"Max height", maxHHint:"The list scrolls past this",
+    secKeys:"Shortcuts", hkPin:"Pin / unpin", hkPinHint:"Click, then press the new combination",
+    hkAdd:"New item",
+    secBehaviour:"Behaviour", autostart:"Start with Windows", autostartHint:"Appears on the desktop silently after sign-in",
+    backToDesktop:"Back to desktop", backHint:"One press while pinned"
+  }
+};
+let LANG = "zh";
+const SYS_ZH = /^zh/i.test(navigator.language || "zh");
+const langOf = p => {
+  const v = (p && p.lang) || "auto";
+  return v === "auto" ? (SYS_ZH ? "zh" : "en") : v;
+};
+function setLang(p){
+  LANG = langOf(p);
+  document.documentElement.lang = LANG === "zh" ? "zh-CN" : "en";
+}
+function t(k, v){
+  let s = (I18N[LANG] && I18N[LANG][k]) || I18N.zh[k] || k;
+  if(v) for(const key in v) s = s.split("{" + key + "}").join(v[key]);
+  return s;
+}
 
 /* ═══════════ 图标 ═══════════ */
 const ICO = {
@@ -815,10 +918,10 @@ const ICO = {
 
 /* ═══════════ 设置项定义 ═══════════ */
 const FONTS = {
-  system:  {label:"系统默认", css:'"Noto Sans SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif'},
-  yahei:   {label:"微软雅黑", css:'"Microsoft YaHei","PingFang SC","Noto Sans SC",sans-serif'},
-  dengxian:{label:"等线",     css:'"DengXian","等线","Microsoft YaHei",sans-serif'},
-  sarasa:  {label:"更纱黑体", css:'"Sarasa Gothic SC","Sarasa UI SC","Noto Sans SC",sans-serif'},
+  system:  {label:"fontSystem", css:'"Noto Sans SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif'},
+  yahei:   {label:"fontYahei", css:'"Microsoft YaHei","PingFang SC","Noto Sans SC",sans-serif'},
+  dengxian:{label:"fontDengxian",     css:'"DengXian","等线","Microsoft YaHei",sans-serif'},
+  sarasa:  {label:"fontSarasa", css:'"Sarasa Gothic SC","Sarasa UI SC","Noto Sans SC",sans-serif'},
   inter:   {label:"Inter",    css:'"Inter","Segoe UI","Noto Sans SC","Microsoft YaHei",sans-serif'}
 };
 const INKS  = ["#000000","#23231F","#3A3A34","#24324A","#1E3D35"];
@@ -831,7 +934,7 @@ const DEFAULT_PREFS = {
   /* idle   = 贴合态「未唤起」时贴桌面的底衬（纯白 / 纸白 / 通透）
      backing = 贴合态「唤起」时浮起来的那层底衬（纯白 / 纸白 / 半透 / 通透） */
   idle:"none", backing:"veil",
-  maxH:620, autostart:false,
+  maxH:620, autostart:false, lang:"auto",
   prefsVer:3,
   hkPin:{mods:["Ctrl","Alt"], code:"KeyD"},
   hkAdd:{mods:["Ctrl","Alt"], code:"KeyN"}
@@ -866,47 +969,88 @@ function migratePrefs(P){
 
 /* ═══════════ 数据 ═══════════ */
 const KEY = "desklist.v2";
-const seed = () => ({
-  cats:[
-    {id:"c1", name:"工作", items:[
-      {id:"i1", text:"写周报交上去", done:false},
-      {id:"i2", text:"回邮件给客户", done:false},
-      {id:"i3", text:"交季度预算表给财务", done:false},
-      {id:"i4", text:"整理这周的会议纪要", done:true, at:3},
-      {id:"i5", text:"把设计稿链接发给工程师", done:true, at:2},
-      {id:"i6", text:"回复 3 条设计意见", done:true, at:1}
-    ]},
-    {id:"c2", name:"生活", items:[
-      {id:"j1", text:"取快递", done:false},
-      {id:"j2", text:"约牙医", done:false}
-    ]},
-    {id:"c3", name:"阅读", items:[
-      {id:"k1", text:"读《设计中的设计》第 4 章", done:false}
-    ]}
-  ],
-  archived:[
-    {id:"a1", name:"旧项目", items:[
-      {id:"a1-1", text:"整理旧项目的交接文档", done:false},
-      {id:"a1-2", text:"归档旧版原型文件", done:true}
-    ]},
-    {id:"a2", name:"2025 年计划", items:[
-      {id:"a2-1", text:"季度复盘", done:false}
-    ]}
-  ],
-  active:"c1",
-  openDone:false,
-  openArch:false,
-  expanded:["a1"],
-  pinned:false,
-  cardW:380,
-  cardH:null,
-  prefs:{...DEFAULT_PREFS},
-  seq:100
-});
+/* 首次启动的示例清单：跟随系统语言，中文系统给中文，其余给英文。
+   只是占位内容，用户一改就写盘，不会因为换语言又变回去。 */
+const SEED = {
+  zh: {
+    cats:[
+      {id:"c1", name:"工作", items:[
+        {id:"i1", text:"写周报交上去", done:false},
+        {id:"i2", text:"回邮件给客户", done:false},
+        {id:"i3", text:"交季度预算表给财务", done:false},
+        {id:"i4", text:"整理这周的会议纪要", done:true, at:3},
+        {id:"i5", text:"把设计稿链接发给工程师", done:true, at:2},
+        {id:"i6", text:"回复 3 条设计意见", done:true, at:1}
+      ]},
+      {id:"c2", name:"生活", items:[
+        {id:"j1", text:"取快递", done:false},
+        {id:"j2", text:"约牙医", done:false}
+      ]},
+      {id:"c3", name:"阅读", items:[
+        {id:"k1", text:"读《设计中的设计》第 4 章", done:false}
+      ]}
+    ],
+    archived:[
+      {id:"a1", name:"旧项目", items:[
+        {id:"a1-1", text:"整理旧项目的交接文档", done:false},
+        {id:"a1-2", text:"归档旧版原型文件", done:true}
+      ]},
+      {id:"a2", name:"2025 年计划", items:[
+        {id:"a2-1", text:"季度复盘", done:false}
+      ]}
+    ]
+  },
+  en: {
+    cats:[
+      {id:"c1", name:"Work", items:[
+        {id:"i1", text:"Ship the weekly report", done:false},
+        {id:"i2", text:"Reply to the client email", done:false},
+        {id:"i3", text:"Send the quarterly budget to finance", done:false},
+        {id:"i4", text:"Tidy up this week's meeting notes", done:true, at:3},
+        {id:"i5", text:"Send the design links to engineering", done:true, at:2},
+        {id:"i6", text:"Answer the 3 design comments", done:true, at:1}
+      ]},
+      {id:"c2", name:"Life", items:[
+        {id:"j1", text:"Pick up the parcel", done:false},
+        {id:"j2", text:"Book the dentist", done:false}
+      ]},
+      {id:"c3", name:"Reading", items:[
+        {id:"k1", text:"Read Chapter 4 of Designing Design", done:false}
+      ]}
+    ],
+    archived:[
+      {id:"a1", name:"Old project", items:[
+        {id:"a1-1", text:"Hand over the old project docs", done:false},
+        {id:"a1-2", text:"Archive the old prototype files", done:true}
+      ]},
+      {id:"a2", name:"2025 plan", items:[
+        {id:"a2-1", text:"Quarterly review", done:false}
+      ]}
+    ]
+  }
+};
+const seed = () => {
+  const d = JSON.parse(JSON.stringify(SEED[SYS_ZH ? "zh" : "en"]));
+  return {
+    cats: d.cats,
+    archived: d.archived,
+    active:"c1",
+    openDone:false,
+    openArch:false,
+    expanded:["a1"],
+    pinned:false,
+    cardW:380,
+    cardH:null,
+    prefs:{...DEFAULT_PREFS},
+    seq:100
+  };
+};
 
 let S = load();
 S.pinned = HAS_T ? false : true;
 S.prefs = migratePrefs(S.prefs);
+setLang(S.prefs);
+invoke("set_lang", { lang: LANG });
 let ctrl = false;
 let hovering = false;
 let draft = null;
@@ -1023,11 +1167,15 @@ const tabsEl = $("#tabs"), listEl = $("#list"), foldEl = $("#folds"), cardEl = $
       scrollEl = $("#scroll"), tabsWrap = $("#tabsWrap");
 
 function render(){
+  setLang(S.prefs);
+  $("#addTxt").textContent = t("addItem");
+  $("#setTitle").textContent = t("settingsTitle");
+  $("#resetBtn").textContent = t("resetPrefs");
   renderTabs();
   renderList();
   renderFolds();
   document.body.classList.toggle("pinned", S.pinned);
-  $("#newcat").innerHTML = `${ICO.plus(7)}<span>新建</span>`;
+  $("#newcat").innerHTML = `${ICO.plus(7)}<span>${t("newTab")}</span>`;
   $("#addPlus").innerHTML = ICO.plus(9, "#fff");
   $("#pclose").innerHTML = ICO.close();
   syncLock();
@@ -1070,25 +1218,25 @@ function renderList(){
     if(itemEditing === i.id){
       return `
     <li class="row editing" data-item="${i.id}">
-      <button class="box" data-act="check:${i.id}" title="勾掉"></button>
+      <button class="box" data-act="check:${i.id}" title="${t('checkTip')}"></button>
       <input class="txi" id="txiInput" value="${esc(i.text)}" autocomplete="off"
              autocorrect="off" autocapitalize="off" spellcheck="false">
     </li>`;
     }
     return `
     <li class="row" data-item="${i.id}">
-      <button class="box" data-act="check:${i.id}" title="勾掉"></button>
-      <span class="txt" data-act="edit:${i.id}" title="点一下改这条">${esc(i.text)}</span>
+      <button class="box" data-act="check:${i.id}" title="${t('checkTip')}"></button>
+      <span class="txt" data-act="edit:${i.id}" title="${t('editTip')}">${esc(i.text)}</span>
     </li>`;
   }).join("");
 
   /* 空分类：一条没有 CheckBox 的占位提示 */
   if(!todos.length && !(draft && draft.cat===c.id)){
-    html += `<li class="blank">这里还没有待办</li>`;
+    html += `<li class="blank">${t("emptyList")}</li>`;
   }
 
   if(draft && draft.cat===c.id){
-    html += `<li class="draft"><span class="ghostbox"></span><input id="draftInput" placeholder="写点什么…"></li>`;
+    html += `<li class="draft"><span class="ghostbox"></span><input id="draftInput" placeholder="${t('draftPh')}"></li>`;
   }
   listEl.innerHTML = html;
 
@@ -1144,37 +1292,37 @@ function renderFolds(){
 
   let html = `<button class="fold" data-act="toggleDone" data-open="${S.openDone?'1':'0'}">
     <span class="ico">${ICO.done()}</span>
-    <span class="lb">已完成<span class="n">${done.length}</span></span>
+    <span class="lb">${t("done")}<span class="n">${done.length}</span></span>
     <span class="chev">${ICO.chev(S.openDone)}</span>
   </button>`;
 
   if(S.openDone){
     html += `<div class="drawer">
       <div class="dhead" data-act="collapseDone">
-        <span class="lb">已完成 · ${done.length}</span>
-        ${done.length?`<button class="act" data-act="clearDone">清空</button>`:""}
+        <span class="lb">${t("done")} · ${done.length}</span>
+        ${done.length?`<button class="act" data-act="clearDone">${t("clear")}</button>`:""}
       </div>
       ${done.length? done.map(i=>`
         <div class="drow">
-          <button class="dbox" data-act="uncheck:${i.id}" title="取消勾选"></button>
+          <button class="dbox" data-act="uncheck:${i.id}" title="${t('restore')}"></button>
           <span class="dtx">${esc(i.text)}</span>
-          <button class="rst" data-act="uncheck:${i.id}">恢复</button>
-        </div>`).join("") : `<div class="dempty">还没有勾掉的事</div>`}
+          <button class="rst" data-act="uncheck:${i.id}">${t("restore")}</button>
+        </div>`).join("") : `<div class="dempty">${t("noDone")}</div>`}
     </div>`;
   }
 
   html += `<div class="grp"></div>
   <button class="fold arch" data-act="toggleArch" data-open="${S.openArch?'1':'0'}">
     <span class="ico">${ICO.arch()}</span>
-    <span class="lb">已归档<span class="n">${arch.length}</span></span>
+    <span class="lb">${t("archived")}<span class="n">${arch.length}</span></span>
     <span class="chev">${ICO.chev(S.openArch)}</span>
   </button>`;
 
   if(S.openArch){
     html += `<div class="drawer">
       <div class="dhead" data-act="collapseArch">
-        <span class="lb">已归档 · ${arch.length}</span>
-        ${arch.length?`<button class="act" data-act="restoreAll">全部恢复</button>`:""}
+        <span class="lb">${t("archived")} · ${arch.length}</span>
+        ${arch.length?`<button class="act" data-act="restoreAll">${t("restoreAll")}</button>`:""}
       </div>
       ${arch.length? arch.map(a=>{
         const open = S.expanded.includes(a.id);
@@ -1182,15 +1330,15 @@ function renderFolds(){
             <button class="caret" data-act="toggleArchCat:${a.id}">${ICO.caret()}</button>
             <span class="name" data-act="toggleArchCat:${a.id}">${esc(a.name)}</span>
             <span class="meta">${a.items.length}</span>
-            <button class="ra" data-act="restoreCat:${a.id}">恢复</button>
-            <button class="rd" data-act="delCat:${a.id}">删除</button>
+            <button class="ra" data-act="restoreCat:${a.id}">${t("restore")}</button>
+            <button class="rd" data-act="delCat:${a.id}">${t("del")}</button>
           </div>
           ${open? a.items.map(i=>`
             <div class="aitem">
               <span class="dbox ${i.done?'on':''}"></span>
               <span class="dtx ${i.done?'done':''}">${esc(i.text)}</span>
             </div>`).join("") : ""}`;
-      }).join("") : `<div class="dempty">没有归档的分类</div>`}
+      }).join("") : `<div class="dempty">${t("noArch")}</div>`}
     </div>`;
   }
 
@@ -1211,8 +1359,8 @@ function updateHints(){
   }
   const above = Math.max(0, Math.round((st - listPadTop()) / ROWH));
   const below = Math.max(0, Math.round((over - st) / ROWH));
-  hintT.innerHTML = above ? `<i>还有 ${above} 条</i>` : "";
-  hintB.innerHTML = below ? `<i>还有 ${below} 条</i>` : "";
+  hintT.innerHTML = above ? `<i>${t("more",{n:above})}</i>` : "";
+  hintB.innerHTML = below ? `<i>${t("more",{n:below})}</i>` : "";
   hintT.classList.toggle("on", above > 0);
   hintB.classList.toggle("on", below > 0);
   placeHints();
@@ -1412,7 +1560,7 @@ document.addEventListener("click", e=>{
     }
     case "add": startDraft(); return;
     case "newcat": {
-      const c = {id:uid("c"), name:"新分类", items:[]};
+      const c = {id:uid("c"), name:t("newCatName"), items:[]};
       S.cats.push(c); S.active=c.id; editing=c.id; S.openDone=false; S.openArch=false;
       render(); return;
     }
@@ -1430,6 +1578,14 @@ document.addEventListener("click", e=>{
       applyPrefs(); applyShortcuts(); renderSettings(); render(); save(); return;
     }
     /* 每一项都立刻落盘：设置面板没有「确定」按钮，改了就该生效并记住 */
+    case "lang": {
+      S.prefs.lang = arg; setLang(S.prefs);
+      invoke("set_lang", { lang: LANG });
+      render(); renderSettings(); save();
+      /* 语言换了，文案行数变了，面板与窗口高度都要重算 */
+      requestAnimationFrame(fitPanel);
+      return;
+    }
     case "font": S.prefs.font = arg; applyPrefs(); renderSettings(); save(); return;
     case "scale": S.prefs.scale = parseFloat(arg); applyPrefs(); renderSettings(); render(); save(); return;
     case "weight": S.prefs.weight = parseInt(arg,10); applyPrefs(); renderSettings(); render(); save(); return;
@@ -1615,9 +1771,9 @@ function openMenu(id, anchor){
   const m = document.createElement("div");
   m.className = "menu"; m.id = "ctxmenu";
   m.innerHTML = `
-    <button data-m="rename"><span class="k">重命名</span><span class="d">双击 Tab 也可以</span></button>
-    <button data-m="archive"><span class="k">归档此分类</span><span class="d">可逆，收进「已归档」随时恢复</span></button>
-    <button data-m="delete"><span class="k danger">删除此分类</span><span class="d">不可逆，需要确认</span></button>`;
+    <button data-m="rename"><span class="k">${t("rename")}</span><span class="d">${t("renameHint")}</span></button>
+    <button data-m="archive"><span class="k">${t("archiveCat")}</span><span class="d">${t("archiveHint")}</span></button>
+    <button data-m="delete"><span class="k danger">${t("delCat")}</span><span class="d">${t("delHint")}</span></button>`;
   document.body.appendChild(m);
   const w = m.offsetWidth, h = m.offsetHeight;
   const left = Math.max(8, Math.min(r.left - 8, innerWidth - w - 8));
@@ -1644,7 +1800,7 @@ function archiveCat(id){
   S.archived.push({id:c.id, name:c.name, items:c.items});
   if(S.active===id) S.active = (S.cats[i] || S.cats[i-1] || {}).id || null;
   if(!S.cats.length){
-    const n = {id:uid("c"), name:"未分类", items:[]};
+    const n = {id:uid("c"), name:t("uncategorized"), items:[]};
     S.cats.push(n); S.active = n.id;
   }
   S.openDone=false;
@@ -1670,27 +1826,27 @@ function confirmDelete(id){
   pendingDelete = {id, where};
   const todo = c.items.filter(i=>!i.done).length;
   const done = c.items.filter(i=>i.done).length;
-  const tally = `这个${where==="arch"?"归档":""}分类里还有 ${todo} 条未完成、${done} 条已完成。`;
+  const tally = t(where === "arch" ? "tallyArch" : "tallyCats", {todo, done});
 
   const mask = document.createElement("div");
   mask.className="modal-mask"; mask.id="modal";
   /* 已经在「已归档」里了，「改为归档」这个选项就不该出现 —— 那儿没有可归档的去处 */
   mask.innerHTML = where === "arch"
     ? `<div class="modal">
-        <h3>彻底删除「${esc(c.name)}」？</h3>
-        <p>${tally}删除会把它们一起丢掉，不能撤销。</p>
+        <h3>${t("delTitleHard", {name: esc(c.name)})}</h3>
+        <p>${t("delBodyHard", {tally})}</p>
         <div class="btns">
-          <button class="btn-ghost" data-m="cancel">取消</button>
-          <button class="btn-danger" data-m="delete">删除</button>
+          <button class="btn-ghost" data-m="cancel">${t("cancel")}</button>
+          <button class="btn-danger" data-m="delete">${t("del")}</button>
         </div>
       </div>`
     : `<div class="modal">
-        <h3>删除「${esc(c.name)}」？</h3>
-        <p>${tally}删除会连它们一起丢掉，不能撤销。<br>如果只是暂时不想看，改成归档效果一样，而且随时能恢复。</p>
+        <h3>${t("delTitle", {name: esc(c.name)})}</h3>
+        <p>${t("delBody", {tally})}</p>
         <div class="btns">
-          <button class="btn-ghost" data-m="cancel">取消</button>
-          <button class="btn-alt" data-m="archive">改为归档</button>
-          <button class="btn-danger" data-m="delete">删除</button>
+          <button class="btn-ghost" data-m="cancel">${t("cancel")}</button>
+          <button class="btn-alt" data-m="archive">${t("archiveInstead")}</button>
+          <button class="btn-danger" data-m="delete">${t("del")}</button>
         </div>
       </div>`;
   document.body.appendChild(mask);
@@ -1718,7 +1874,7 @@ function confirmDelete(id){
           if(S.active===job.id) S.active = (S.cats[i]||S.cats[i-1]||{}).id||null;
         }
         if(!S.cats.length){
-          const n={id:uid("c"),name:"未分类",items:[]}; S.cats.push(n); S.active=n.id;
+          const n={id:uid("c"),name:t("uncategorized"),items:[]}; S.cats.push(n); S.active=n.id;
         }
         S.openDone=false;
       }else{
@@ -1757,14 +1913,14 @@ function keyLabel(code){
            ArrowLeft:"←", ArrowRight:"→", Backquote:"`"}[code] || code);
 }
 function hotkeyText(h){
-  if(!h || !h.code) return "未设置";
+  if(!h || !h.code) return t("hotkeyUnset");
   return [...(h.mods||[]), keyLabel(h.code)].join(" + ");
 }
 function recordHotkey(which){
   recording = which;
   renderSettings();
   const btn = $("#hk-" + which);
-  if(btn){ btn.classList.add("rec"); btn.textContent = "按下组合键…"; }
+  if(btn){ btn.classList.add("rec"); btn.textContent = t("pressCombo"); }
 
   escHandler = (e)=>{
     if(!recording) return false;
@@ -1781,7 +1937,7 @@ function recordHotkey(which){
     const code = e.code;
     /* 必须带修饰键，且主键不能是可修饰键本身 */
     const bad = !mods.length || /^(Control|Alt|Shift|Meta)/.test(code);
-    if(bad){ flashHk("至少要有一个 Ctrl / Alt / Shift"); return true; }
+    if(bad){ flashHk(t("needMod")); return true; }
 
     const which2 = recording;
     recording = null; escHandler = null;
@@ -1790,7 +1946,7 @@ function recordHotkey(which){
     save();
     applyShortcuts().then(ok=>{
       renderSettings();
-      if(!ok) flashHk("这个组合被系统或其他程序占用了，换一个");
+      if(!ok) flashHk(t("hkTaken"));
     });
     return true;
   };
@@ -1815,6 +1971,7 @@ function applyShortcuts(){
 
 /* ═══════════ 设置面板 ═══════════ */
 function renderSettings(){
+  setLang(S.prefs);
   const P = S.prefs;
   const seg = (arr, cur, act) => `<div class="seg">${
     arr.map(o=>`<button data-act="${act}:${o.v}" data-on="${String(o.v)===String(cur)?'1':'0'}">${o.t}</button>`).join("")
@@ -1822,95 +1979,103 @@ function renderSettings(){
 
   $("#pbody").innerHTML = `
     <div class="sec">
-      <h4>待办文字</h4>
+      <h4>${t("secLang")}</h4>
       <div class="field">
-        <div class="fl"><b>字体</b><i>只影响事项文字，界面本身不变</i></div>
+        <div class="fl"><b>${t("langLabel")}</b><i>${t("langHint")}</i></div>
+        ${seg([{v:"auto",t:t("langAuto")},{v:"zh",t:"中文"},{v:"en",t:"English"}], P.lang || "auto", "lang")}
+      </div>
+    </div>
+
+    <div class="sec">
+      <h4>${t("secText")}</h4>
+      <div class="field">
+        <div class="fl"><b>${t("font")}</b><i>${t("fontHint")}</i></div>
         <select class="sel" id="fontSel">
-          ${Object.entries(FONTS).map(([k,v])=>`<option value="${k}" ${P.font===k?'selected':''}>${v.label}</option>`).join("")}
+          ${Object.entries(FONTS).map(([k,v])=>`<option value="${k}" ${P.font===k?'selected':''}>${t(v.label)}</option>`).join("")}
         </select>
       </div>
       <div class="field">
-        <div class="fl"><b>字号</b><i>只缩放待办文字</i></div>
-        ${seg([{v:"0.92",t:"小"},{v:"1",t:"标准"},{v:"1.12",t:"大"},{v:"1.24",t:"特大"}], P.scale, "scale")}
+        <div class="fl"><b>${t("size")}</b><i>${t("sizeHint")}</i></div>
+        ${seg([{v:"0.92",t:t("sSmall")},{v:"1",t:t("sStd")},{v:"1.12",t:t("sLarge")},{v:"1.24",t:t("sXL")}], P.scale, "scale")}
       </div>
       <div class="field">
-        <div class="fl"><b>字重</b></div>
-        ${seg([{v:"400",t:"常规"},{v:"500",t:"中黑"},{v:"600",t:"加粗"}], P.weight, "weight")}
+        <div class="fl"><b>${t("weight")}</b></div>
+        ${seg([{v:"400",t:t("wReg")},{v:"500",t:t("wMed")},{v:"600",t:t("wBold")}], P.weight, "weight")}
       </div>
       <div class="field">
-        <div class="fl"><b>斜体</b></div>
+        <div class="fl"><b>${t("italic")}</b></div>
         <button class="sw" data-act="italic" data-on="${P.italic?'1':'0'}"></button>
       </div>
       <div class="field">
-        <div class="fl"><b>文字颜色</b><i>仅「未唤起 + 通透」时生效，其余保持墨色</i></div>
+        <div class="fl"><b>${t("ink")}</b><i>${t("inkHint")}</i></div>
         <div class="swatches">
           ${INKS.map(c=>`<button class="sw-dot" data-act="ink:${c}" data-on="${(P.ink||'').toLowerCase()===c.toLowerCase()?'1':'0'}" style="background:${c}"></button>`).join("")}
-          <label class="sw-pick" title="自定义"><input type="color" id="inkPick" value="${P.ink}"></label>
+          <label class="sw-pick" title="${t('custom')}"><input type="color" id="inkPick" value="${P.ink}"></label>
         </div>
       </div>
     </div>
 
     <div class="sec">
-      <h4>贴合态</h4>
+      <h4>${t("secIdle")}</h4>
       <div class="field">
-        <div class="fl"><b>未唤起底衬</b><i>贴在桌面上、没碰它时的样子</i></div>
-        ${seg([{v:"white",t:"纯白"},{v:"paper",t:"纸白"},{v:"none",t:"通透"}], P.idle, "idle")}
+        <div class="fl"><b>${t("idleBacking")}</b><i>${t("idleHint")}</i></div>
+        ${seg([{v:"white",t:t("cWhite")},{v:"paper",t:t("cPaper")},{v:"none",t:t("cNone")}], P.idle, "idle")}
       </div>
       <div class="field">
-        <div class="fl"><b>唤醒时底衬</b><i>按住 Ctrl 且指针在卡片上时浮起的一层</i></div>
-        ${seg([{v:"white",t:"纯白"},{v:"paper",t:"纸白"},{v:"veil",t:"半透"}], P.backing, "backing")}
+        <div class="fl"><b>${t("wakeBacking")}</b><i>${t("wakeHint")}</i></div>
+        ${seg([{v:"white",t:t("cWhite")},{v:"paper",t:t("cPaper")},{v:"veil",t:t("cVeil")}], P.backing, "backing")}
       </div>
       <div class="field">
-        <div class="fl"><b>文字光晕</b><i>仅「未唤起 + 通透」时生效</i></div>
+        <div class="fl"><b>${t("halo")}</b><i>${t("haloHint")}</i></div>
         <button class="sw" data-act="halo" data-on="${P.halo?'1':'0'}"></button>
       </div>
       <div class="field">
-        <div class="fl"><b>光晕颜色</b></div>
+        <div class="fl"><b>${t("haloColor")}</b></div>
         <div class="swatches">
           ${HALOS.map(c=>`<button class="sw-dot" data-act="haloColor:${c}" data-on="${(P.haloColor||'').toLowerCase()===c.toLowerCase()?'1':'0'}" style="background:${c}"></button>`).join("")}
-          <label class="sw-pick" title="自定义"><input type="color" id="haloPick" value="${P.haloColor||'#FFFFFF'}"></label>
+          <label class="sw-pick" title="${t('custom')}"><input type="color" id="haloPick" value="${P.haloColor||'#FFFFFF'}"></label>
         </div>
       </div>
     </div>
 
     <div class="sec">
-      <h4>外观</h4>
+      <h4>${t("secLook")}</h4>
       <div class="field">
-        <div class="fl"><b>卡片底色</b><i>置顶态用</i></div>
-        ${seg([{v:"white",t:"纯白"},{v:"paper",t:"纸白"},{v:"veil",t:"半透"}], P.tone, "tone")}
+        <div class="fl"><b>${t("tone")}</b><i>${t("toneHint")}</i></div>
+        ${seg([{v:"white",t:t("cWhite")},{v:"paper",t:t("cPaper")},{v:"veil",t:t("cVeil")}], P.tone, "tone")}
       </div>
       <div class="field">
-        <div class="fl"><b>聚焦外发光</b><i>置顶态点中卡片时亮一圈</i></div>
+        <div class="fl"><b>${t("ring")}</b><i>${t("ringHint")}</i></div>
         <button class="sw" data-act="ring" data-on="${P.ring?'1':'0'}"></button>
       </div>
       <div class="field">
-        <div class="fl"><b>高度上限</b><i>超出后清单内部滚动</i></div>
+        <div class="fl"><b>${t("maxH")}</b><i>${t("maxHHint")}</i></div>
         <input class="rng" type="range" id="maxhRng" min="300" max="900" step="20" value="${P.maxH}">
         <span class="rngv" id="maxhVal">${P.maxH}px</span>
       </div>
     </div>
 
     <div class="sec">
-      <h4>快捷键</h4>
+      <h4>${t("secKeys")}</h4>
       <div class="field">
-        <div class="fl"><b>置顶 / 贴回桌面</b><i>点一下再按新的组合</i></div>
+        <div class="fl"><b>${t("hkPin")}</b><i>${t("hkPinHint")}</i></div>
         <button class="hkey" id="hk-pin" data-act="hkRecord:pin">${hotkeyText(P.hkPin)}</button>
       </div>
       <div class="field">
-        <div class="fl"><b>直接新建一条</b></div>
+        <div class="fl"><b>${t("hkAdd")}</b></div>
         <button class="hkey" id="hk-add" data-act="hkRecord:add">${hotkeyText(P.hkAdd)}</button>
       </div>
       <div class="hkerr" id="hkmsg"></div>
     </div>
 
     <div class="sec">
-      <h4>行为</h4>
+      <h4>${t("secBehaviour")}</h4>
       <div class="field">
-        <div class="fl"><b>开机自动启动</b><i>登录后静默贴到桌面</i></div>
+        <div class="fl"><b>${t("autostart")}</b><i>${t("autostartHint")}</i></div>
         <button class="sw" data-act="autostart" data-on="${P.autostart?'1':'0'}"></button>
       </div>
       <div class="field">
-        <div class="fl"><b>贴回桌面</b><i>置顶态下按一下就行</i></div>
+        <div class="fl"><b>${t("backToDesktop")}</b><i>${t("backHint")}</i></div>
         <span class="kbd">Esc</span>
       </div>
     </div>`;
@@ -1929,6 +2094,17 @@ function renderSettings(){
       applyPrefs(); save(); requestAnimationFrame(reportHeight);
     };
   }
+}
+
+/* 面板高度 = 头部 + 内容 + 页脚，窗口高度取「卡片 / 面板」里更高的那个。
+   语言一换、文案换行数变了，面板就得重算一次。 */
+function fitPanel(){
+  if(!panelOpen) return;
+  const hd = $(".phead"), bd = $("#pbody"), ft = $(".pfoot");
+  if(!hd || !bd || !ft) return;
+  const ph = Math.ceil(hd.offsetHeight + bd.scrollHeight + ft.offsetHeight);
+  const ch = Math.round(cardEl.getBoundingClientRect().height);
+  invoke("fit_settings", { h: Math.max(ph, ch) + 40 });
 }
 
 let prevPinned = null;
@@ -1964,12 +2140,7 @@ function openSettings(){
     invoke("enter_settings", { side, pw });
 
     /* 面板高度按内容定；窗口高度取「卡片 / 面板」里更高的那个，只往下长，不挪位置 */
-    requestAnimationFrame(()=>requestAnimationFrame(()=>{
-      const hd = $(".phead"), bd = $("#pbody"), ft = $(".pfoot");
-      if(!hd || !bd || !ft) return;
-      const ph = Math.ceil(hd.offsetHeight + bd.scrollHeight + ft.offsetHeight);
-      invoke("fit_settings", { h: Math.max(ph, ch) + 40 });
-    }));
+    requestAnimationFrame(()=>requestAnimationFrame(fitPanel));
   });
 }
 function closeSettings(){

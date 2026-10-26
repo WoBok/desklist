@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, WebviewWindow};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
@@ -377,26 +377,72 @@ fn send_to_bottom(win: &WebviewWindow) {
 #[cfg(not(windows))]
 fn send_to_bottom(_win: &WebviewWindow) {}
 
-/* ── 真·置顶 ─────────────────────────────────────────────────
-   Tauri 的 set_always_on_top 会被紧随其后的 set_ignore_cursor_events 冲掉：
-   后者用 SetWindowLongPtr 重写整份 GWL_EXSTYLE，WS_EX_TOPMOST（0x8）这一位
-   没被保住。实测连按 Ctrl+Alt+D 三次，0x8 一次都没置上 ——
-   窗口只是从「穿透」变成「普通窗口」，照样被浏览器、微信盖住。
-
-   托盘菜单看起来「能用」，是因为点它时窗口本来就被激活到了前面，
-   并不是真的置顶；换个程序点两下就露馅。
-
-   所以每次改完穿透样式，都自己补一刀 SetWindowPos，绕开 Tauri 的内部状态。 */
+/* ── 界面语言 ─────────────────────────────────────────────────
+托盘菜单是系统级 UI，读不到 WebView 的 navigator.language，所以自己问一次
+Windows：主语言 ID（低 10 位）= 0x04 就是中文（简/繁/港/新都算）。
+前端在设置里选过语言后调 set_lang 把托盘一起刷新，两边不会打架。 */
 #[cfg(windows)]
-fn force_top(win: &WebviewWindow, on: bool) {
+fn is_zh_current() -> bool {
+    use windows::Win32::Globalization::GetUserDefaultUILanguage;
+    let id = unsafe { GetUserDefaultUILanguage() } as u32;
+    (id & 0x3ff) == 0x04
+}
+
+#[cfg(not(windows))]
+fn is_zh_current() -> bool {
+    std::env::var("LANG").map(|v| v.starts_with("zh")).unwrap_or(false)
+}
+
+/* 托盘菜单：id 不变，只换显示文字。切换语言时整张重建再 set_menu，
+   不逐个 set_text —— 那样漏一个就是中英混排。 */
+fn tray_menu(app: &tauri::AppHandle, zh: bool) -> tauri::Result<Menu<tauri::Wry>> {
+    let l = |a: &'static str, b: &'static str| if zh { a } else { b };
+    let show_i = MenuItemBuilder::with_id("show", l("显示清单", "Show list")).build(app)?;
+    let pin_i = MenuItemBuilder::with_id("pin", l("置顶 / 贴回桌面", "Pin / unpin")).build(app)?;
+    let set_i = MenuItemBuilder::with_id("settings", l("设置…", "Settings…")).build(app)?;
+    let quit_i = MenuItemBuilder::with_id("quit", l("退出 Desk List", "Quit Desk List")).build(app)?;
+    MenuBuilder::new(app)
+        .items(&[&show_i, &pin_i])
+        .separator()
+        .items(&[&set_i])
+        .separator()
+        .items(&[&quit_i])
+        .build()
+}
+
+/* ── 真·置顶 ─────────────────────────────────────────────────
+   Tauri 的 set_always_on_top 靠不住：置顶/贴回桌面这一下，窗口的 exstyle
+   会从 0xC0130（layered + 穿透）整份改写成 0x40110，WS_EX_TOPMOST（0x8）
+   在这一步丢掉；而且改写是异步落到消息循环里的，谁先谁后没准。
+
+   实测现象（这也是最容易误判的地方）：
+     · 切到置顶态的那一瞬间，SetWindowPos(HWND_TOPMOST) 返回成功，
+       紧接着读回来却还是 0x40110 —— 样式正在重建，这一位挂不上；
+     · 同一个窗口等它稳定下来再设，就稳了；
+     · 但鼠标一移上来，apply_mouse 又会跑一遍 set_ignore_cursor_events，
+       照样把 0x8 冲掉。
+
+   所以这里不做「一次性设置」的假设：
+     1) 设之前先看，已经是目标状态就不动（省掉无谓的 Z 序重排）；
+     2) 设完立刻验，不对就退到直接写 exstyle；
+     3) 轮询线程每轮顺手看一眼，置顶态下发现 0x8 没了就补回来。
+   一次 GetWindowLongW 是纳秒级，不担心开销。 */
+#[cfg(windows)]
+fn force_top_raw(hwnd: isize, on: bool) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        GetWindowLongW, SetWindowLongPtrW, SetWindowPos, HWND_NOTOPMOST, HWND_TOPMOST,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WINDOW_LONG_PTR_INDEX,
     };
-    if let Ok(h) = win.hwnd() {
-        unsafe {
+    unsafe {
+        let h = HWND(hwnd as *mut _);
+        let read = || GetWindowLongW(h, WINDOW_LONG_PTR_INDEX(-20)) as u32;
+        if ((read() & 0x8) != 0) == on {
+            return;
+        }
+        for _ in 0..3 {
             let _ = SetWindowPos(
-                HWND(h.0),
+                h,
                 if on { HWND_TOPMOST } else { HWND_NOTOPMOST },
                 0,
                 0,
@@ -404,7 +450,29 @@ fn force_top(win: &WebviewWindow, on: bool) {
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
+            let now = read();
+            if ((now & 0x8) != 0) == on {
+                return;
+            }
+            /* 退路：直接写那一位。样式重建期间 SetWindowPos 会被吞掉。 */
+            let want = if on { now | 0x8 } else { now & !0x8 };
+            SetWindowLongPtrW(h, WINDOW_LONG_PTR_INDEX(-20), want as isize);
+            if ((read() & 0x8) != 0) == on {
+                return;
+            }
+            thread::sleep(Duration::from_millis(2));
         }
+        logln(&format!("force_top({}) 三次都没挂上，ex=0x{:X}", on, read()));
+    }
+}
+
+#[cfg(not(windows))]
+fn force_top_raw(_hwnd: isize, _on: bool) {}
+
+#[cfg(windows)]
+fn force_top(win: &WebviewWindow, on: bool) {
+    if let Ok(h) = win.hwnd() {
+        force_top_raw(h.0 as isize, on);
     }
 }
 
@@ -737,6 +805,7 @@ unsafe extern "system" fn mouse_hook(
 }
 
 fn do_pin(win: &WebviewWindow, pinned: bool) {
+    logln(&format!("do_pin({})", pinned));
     PINNED.store(pinned, Ordering::Relaxed);
     /* 用户显式改过状态：临时的「打字置顶」标记作废 */
     TEMP_PIN.store(false, Ordering::Relaxed);
@@ -752,6 +821,24 @@ fn do_pin(win: &WebviewWindow, pinned: bool) {
     /* Tauri 这一下不可靠（见 force_top 注释），自己再确认一次 */
     force_top(win, pinned);
     apply_mouse(win);
+    if pinned {
+        /* 置顶也要补刀，而且必须等一会儿：
+           切进置顶态的那一百多毫秒里，Tauri 正在把窗口从 layered 样式重新
+           建成普通窗口（exstyle 从 0xC0130 变成 0x40110），这段时间里
+           SetWindowPos(HWND_TOPMOST) 返回成功但 0x8 位根本挂不上 ——
+           实测连补 5 次、每次隔 2ms，读回来还是 0x40110。
+           等样式重建结束再补，一次就成。 */
+        let w2 = win.clone();
+        thread::spawn(move || {
+            for step in [120u64, 220] {
+                thread::sleep(Duration::from_millis(step));
+                if !PINNED.load(Ordering::Relaxed) || SETTINGS.load(Ordering::Relaxed) {
+                    return;
+                }
+                force_top(&w2, true);
+            }
+        });
+    }
     if !pinned {
         /* 沉底要压两轮：
            第一轮是正常的「立刻贴回桌面」；
@@ -1112,6 +1199,20 @@ fn autostart_query() -> bool {
 }
 
 #[tauri::command]
+fn set_lang(app: tauri::AppHandle, lang: String) {
+    let zh = match lang.as_str() {
+        "zh" => true,
+        "en" => false,
+        _ => is_zh_current(),
+    };
+    if let Some(tray) = app.tray_by_id("main") {
+        if let Ok(m) = tray_menu(&app, zh) {
+            let _ = tray.set_menu(Some(m));
+        }
+    }
+}
+
+#[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
@@ -1367,6 +1468,7 @@ fn main() {
             exit_settings,
             app_version,
             set_shortcuts,
+            set_lang,
             set_autostart,
             autostart_state,
             quit_app,
@@ -1516,6 +1618,13 @@ fn main() {
 
                 /* 窗口句柄缓存住，整个循环只取一次，不再每轮去 HashMap 里翻 */
                 let me = MY_HWND.load(Ordering::Relaxed);
+                /* 置顶态兜底：鼠标挪动、托盘菜单、切前台都会让 apply_mouse 再跑一遍
+                   set_ignore_cursor_events，而那一下会把 WS_EX_TOPMOST 整位冲掉。
+                   每轮顺手看一眼（已经是置顶就直接返回，只有 GetWindowLongW），
+                   掉了立刻补回来 —— 用户不会看到「置顶一会儿又被盖住」。 */
+                if pinned && me != 0 {
+                    force_top_raw(me, true);
+                }
                 let rect = if me != 0 { win_rect(me) } else { None };
 
                 if let Some((l, t, r, b)) = rect {
@@ -1629,17 +1738,7 @@ fn main() {
             }
 
             /* 托盘 */
-            let show_i = MenuItemBuilder::with_id("show", "显示清单").build(app)?;
-            let pin_i = MenuItemBuilder::with_id("pin", "置顶 / 贴回桌面").build(app)?;
-            let set_i = MenuItemBuilder::with_id("settings", "设置…").build(app)?;
-            let quit_i = MenuItemBuilder::with_id("quit", "退出 Desk List").build(app)?;
-            let menu = MenuBuilder::new(app)
-                .items(&[&show_i, &pin_i])
-                .separator()
-                .items(&[&set_i])
-                .separator()
-                .items(&[&quit_i])
-                .build()?;
+            let menu = tray_menu(app.handle(), is_zh_current())?;
 
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())

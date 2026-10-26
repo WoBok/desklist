@@ -6,7 +6,7 @@
 
 !define APP      "DeskList"
 !define APPNAME  "Desk List"
-!define VER      "1.5.10"
+!define VER      "1.5.11"
 !define EXE      "DeskList.exe"
 !define REGUN    "Software\Microsoft\Windows\CurrentVersion\Uninstall\DeskList"
 !define REGAPP   "Software\DeskList"

@@ -21,6 +21,7 @@ Because pointer input passes through by default, it obstructs neither desktop ic
 - **Tray menu** — show, pin, unpin, quit
 - **Categories and archiving** — checking an item moves it to that category's completed list; archiving clears it
 - **Adjustable width** — drag the right edge, 320–520 px
+- **Interface language** — follows the system language (Chinese or English) and can be changed in Settings; the tray menu follows suit
 - **Local storage** — a single JSON file; no account, no synchronization, no telemetry
 
 ## Download
