@@ -19,7 +19,7 @@ Because pointer input passes through by default, it obstructs neither desktop ic
 - **`Ctrl+Alt+D`** — toggles pinned mode: the card becomes clickable and stays above other windows; press again to return it to the desktop
 - **`Ctrl+Alt+N`** — creates an item from any application
 - **Tray menu** — show, pin, unpin, quit
-- **Categories and archiving** — checking an item moves it to that category's completed list; archiving clears it
+- **Categories and archiving** — checking an item moves it to that category's completed list, where it can be restored or deleted; archiving clears it
 - **Adjustable width** — drag the right edge, 320–520 px
 - **Interface language** — follows the system language (Chinese or English) and can be changed in Settings; the tray menu follows suit
 - **Local storage** — a single JSON file; no account, no synchronization, no telemetry

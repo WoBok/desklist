@@ -495,13 +495,16 @@ body.canvas .arow:hover{background:transparent}
   flex:1;min-width:0;font-size:var(--fz-drawer);font-style:normal;color:var(--ink-4);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-.rst{
+.rst,.rdl{
   flex:0 0 auto;background:none;border:0;padding:1px 4px;border-radius:4px;cursor:pointer;
   font-size:var(--fz-mini);color:var(--ink-6);
-  opacity:0;transition:opacity .13s ease,color .13s ease;
+  opacity:0;transition:opacity .13s ease,color .13s ease,background .13s ease;
 }
-.drow:hover .rst{opacity:1}
+.drow:hover .rst,.drow:hover .rdl{opacity:1}
 .rst:hover{color:var(--teal);background:rgba(60,119,103,.08)}
+/* 删除不可逆，静止态就给一点砖红，别和「恢复」长成同一个灰 */
+.rdl{color:rgba(180,69,58,.72)}
+.rdl:hover{color:var(--red);background:rgba(180,69,58,.08)}
 .dempty{font-size:var(--fz-mini);color:var(--ink-6);padding:2px 4px 3px}
 
 .arow{display:flex;align-items:center;gap:7px;height:24px;padding:0 2px;border-radius:5px}
@@ -1307,6 +1310,7 @@ function renderFolds(){
           <button class="dbox" data-act="uncheck:${i.id}" title="${t('restore')}"></button>
           <span class="dtx">${esc(i.text)}</span>
           <button class="rst" data-act="uncheck:${i.id}">${t("restore")}</button>
+          <button class="rdl" data-act="delDone:${i.id}">${t("del")}</button>
         </div>`).join("") : `<div class="dempty">${t("noDone")}</div>`}
     </div>`;
   }
@@ -1549,6 +1553,13 @@ document.addEventListener("click", e=>{
     }
     case "clearDone": {
       const c = cat(); c.items = c.items.filter(i=>!i.done); render(); return;
+    }
+    /* 删掉一条已完成：跟「清空」一样不弹确认 —— 抽屉里已经先点过一次，
+       再套一层模态反而比清空整批还重 */
+    case "delDone": {
+      const c = cat();
+      if(c) c.items = c.items.filter(i=>i.id!==arg);
+      render(); return;
     }
     case "collapseDone": S.openDone=false; render(); return;
     case "collapseArch": S.openArch=false; render(); return;
