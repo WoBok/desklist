@@ -1,0 +1,17 @@
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+*.pdb
+
+# Node
+node_modules/
+
+# Build output
+dist/
+*.exe
+!installer/*.nsi
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

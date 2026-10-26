@@ -1,0 +1,2226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Desk List</title>
+<style>
+:root{
+  /* 纸张与墨 */
+  --paper:#F4F3EF;
+  --ink:#23231F;
+  --ink-2:#3A3A34;
+  --ink-3:#6E6D66;
+  --ink-4:#8C8A82;
+  --ink-5:#B3B1A9;
+  --ink-6:#C9C7BF;
+  --teal:#3C7767;
+  --teal-ink:#2F6255;
+  --teal-soft:#EAF1ED;
+  --red:#B4453A;
+  --line:#EFEDE6;
+  --line-2:#E4E2DA;
+  --card:#FFFFFF;
+  --card-paper:#FBFAF6;
+  --drawer:#FAFAF7;
+
+  /* 界面字体：固定系统栈，永远不跟「字体」设置走 */
+  --ui-font:"Segoe UI","Microsoft YaHei UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+
+  /* 由设置驱动 —— 只作用于「待办文字」 */
+  --font:"Noto Sans SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  --is:1;                       /* 待办字号倍率 */
+  --item-fw:400;
+  --item-fs:normal;
+  --item-ink:#23231F;
+  --halo:#FFFFFF;               /* 贴合态文字光晕颜色 */
+  --maxh:620px;
+
+  /* 界面字号固定，不随「字号」设置走 —— 只调待办文字 */
+  --fz-tab:12px;
+  --fz-item:13px;
+  --fz-fold:11px;
+  --fz-drawer:11.5px;
+  --fz-mini:10px;
+}
+*{box-sizing:border-box}
+/* 表单控件默认不继承字体：Tab 名、分段控件、按钮上的字会掉回 Arial，
+   和正文的 Segoe UI / 微软雅黑 不是一套。这里统一拉回界面字体栈；
+   待办文字（.txt / .draft input）有自己的 var(--font) 规则，优先级更高，不受影响。 */
+button,input,select,textarea{font-family:var(--ui-font)}
+/* 切状态的那一帧（置顶 ↔ 贴合）先掐掉过渡，
+   否则底色会从中间值滑过去，看起来像闪了一下 */
+body.switching .card,
+body.switching .op{transition:none !important}
+html{margin:0;padding:0;background:transparent;overflow:hidden;height:100%}
+body{
+  margin:0;background:transparent;overflow:hidden;height:100%;
+  font-family:var(--ui-font);color:var(--ink);
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+  padding:20px;
+  user-select:none;
+  cursor:default;
+}
+/* 全局面包屑：默认焦点框一律去掉，只在自定义控件上自己画 */
+*:focus,button:focus,input:focus,select:focus{outline:0}
+::-moz-focus-inner{border:0}
+
+/* ══════════ 卡片 ══════════ */
+.card{
+  position:relative;width:100%;max-height:var(--maxh);
+  background:var(--card);
+  border-radius:13px;
+  padding:15px 15px 13px;
+  display:flex;flex-direction:column;gap:0;
+  overflow:hidden;
+}
+/* 置顶态：白卡 + 极轻的边界，不再拖一大片灰雾 */
+body.pinned .card{box-shadow:0 0 0 1px rgba(30,30,26,.075)}
+/* 焦点外发光：只在点中卡片时亮一圈 */
+body.pinned:not(.noRing).focus .card,
+body.pinned:not(.noRing) .card:focus-within{
+  box-shadow:
+    0 0 0 1.5px rgba(60,119,103,.80),
+    0 0 12px 0 rgba(60,119,103,.34),
+    0 0 22px 2px rgba(60,119,103,.15);
+}
+body[data-tone="paper"] .card{background:var(--card-paper)}
+body[data-tone="veil"] .card{background:rgba(255,255,255,.82);backdrop-filter:blur(18px) saturate(1.1)}
+
+/* 贴合态底衬分两层：
+   —— 未唤起：由「未唤起底衬」决定（纯白 / 纸白 / 通透）
+   —— 唤起：由「唤醒时底衬」决定（纯白 / 纸白 / 半透 / 通透）
+   两套是独立设置，用户想贴什么样就贴什么样。
+   注意「纸白」就是纸白，不再带半透；想要半透有单独一档。 */
+body:not(.pinned) .card{
+  padding:15px 15px 13px;border-radius:12px;
+  background:transparent;box-shadow:none;
+  /* 按住 Ctrl 时卡片会向下长出 81px．那一块底色若是「啪」地出现，
+     看起来就像闪了一下。让底色淡进来，长出来的部分先透、再实，
+     高度变化本身还是原子的 —— 不做高度动画，就不会有中间态的错位。 */
+  transition:background-color .16s ease,box-shadow .16s ease;
+}
+body:not(.pinned)[data-idle="white"] .card{
+  background:#FFFFFF;
+  box-shadow:0 0 0 .5px rgba(30,30,26,.055),0 6px 18px -14px rgba(30,30,26,.22);
+}
+body:not(.pinned)[data-idle="paper"] .card{
+  background:#FBFAF6;
+  box-shadow:0 0 0 .5px rgba(30,30,26,.055),0 6px 18px -14px rgba(30,30,26,.20);
+}
+body:not(.pinned)[data-idle="none"] .card{background:transparent;box-shadow:none}
+
+body:not(.pinned).wake[data-backing="white"] .card{
+  background:#FFFFFF;
+  box-shadow:0 0 0 .5px rgba(30,30,26,.07),0 10px 26px -14px rgba(30,30,26,.30);
+}
+body:not(.pinned).wake[data-backing="paper"] .card{
+  background:#FBFAF6;
+  box-shadow:0 0 0 .5px rgba(30,30,26,.07),0 10px 26px -14px rgba(30,30,26,.30);
+}
+body:not(.pinned).wake[data-backing="veil"] .card{
+  background:rgba(251,250,246,.74);
+  backdrop-filter:blur(18px) saturate(1.18);
+  box-shadow:0 0 0 .5px rgba(30,30,26,.07),0 10px 26px -14px rgba(30,30,26,.26);
+}
+body:not(.pinned).wake[data-backing="none"] .card{background:transparent;box-shadow:none}
+body:not(.pinned)[data-tone="veil"] .card{backdrop-filter:none}
+
+/* 操作层：Tab / 新增 / 折叠条。
+   贴合态「位置永远占着，只是看不见」—— 这样唤醒时文字绝对不会被挤下去。
+   只在「浮现」时淡入；「隐去」交给下面的 leaving 一起走
+   （以前是瞬间隐去的，但底衬自己还要淡 150ms，于是 Tab 先没、
+     底衬还在，看着就是两段动画）。 */
+.op{opacity:0;pointer-events:none;transition:none}
+body.wake .op,body.pinned .op{opacity:1;pointer-events:auto;transition:opacity .13s ease}
+
+/* ══ 退场：底衬要整块一起消失 ══
+   从「Ctrl 唤起」松手退回去时，卡片要矮 81px（折叠区撤走）。
+   以前 wake 一摘：折叠区当场 display:none、卡片高度减 81、窗口跟着缩，
+   可底色的 transition 还要 150ms 才走完 —— 于是先看到「已完成/已归档没了」，
+   紧接着看到「一块没有底部的底衬」在那里慢慢淡，成了两段动画。
+   现在反过来：leaving 期间 wake 还挂着，几何一点不动，只让颜色、模糊、
+   操作层一起退；退干净了再收高度。收的时候底衬已经透明，看不见形状变化。 */
+body:not(.pinned).leaving .card{
+  transition:background-color .15s ease,box-shadow .15s ease,backdrop-filter .15s ease;
+  backdrop-filter:blur(0px) saturate(1);
+}
+body:not(.pinned)[data-idle="none"].leaving .card{background:transparent;box-shadow:none}
+body:not(.pinned).leaving .op{opacity:0;pointer-events:none;transition:opacity .15s ease}
+
+/* 贴合态「未唤起」只留清单本身：
+   Tab 行留着高度（那是顶部「还有几条」的落点），
+   但「新增一条」和下方折叠条整块从布局里撤掉 —— 否则卡片底部会拖出
+   一大片什么也没有的空白。撤的时候走高度过渡，卡片跟着变高变矮，
+   不会「啪」地跳一下。 */
+body:not(.pinned):not(.wake) .card{
+  padding-bottom:26px;
+  /* 底部操作层收走后卡片本来就矮了一截，这里再把上限也减掉同样的量，
+     让「清单视口高度」在唤起前后完全一致 ——
+     否则按住 Ctrl 的瞬间视口变短，滚到底的人会被挤一下。 */
+  max-height:calc(var(--maxh) - 81px);
+}
+body:not(.pinned):not(.wake) .add,
+body:not(.pinned):not(.wake) .folds{
+  display:none;
+}
+
+/* ══════════ 顶部 Tab ══════════ */
+.head{
+  display:flex;align-items:center;gap:10px;height:26px;
+  flex:0 0 auto;
+}
+.tabs-wrap{position:relative;flex:1;min-width:0;height:26px}
+.tabs{
+  display:flex;align-items:flex-end;gap:14px;
+  height:26px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;
+  scroll-behavior:smooth;
+}
+.tabs::-webkit-scrollbar{display:none}
+.tab{
+  position:relative;flex:0 0 auto;height:26px;
+  padding:0;background:none;border:0;cursor:pointer;
+  display:flex;align-items:center;
+  font-size:var(--fz-tab);line-height:1;color:var(--ink-4);
+  white-space:nowrap;letter-spacing:.01em;
+  transition:color .14s ease;
+}
+.tab:hover{color:var(--ink-2)}
+/* 选中态用固定的墨色，不跟「文字颜色」设置走 */
+.tab[data-on="1"]{color:#23231F;font-weight:600}
+.tab::after{
+  content:"";position:absolute;left:0;right:0;bottom:1px;height:2px;border-radius:2px;
+  background:transparent;transition:background .16s ease, transform .16s ease;
+  transform:scaleX(.5);
+}
+.tab[data-on="1"]::after{background:var(--teal);transform:scaleX(1)}
+.tab .ren{
+  width:80px;border:0;outline:0;background:none;padding:0;
+  border-bottom:1px solid var(--teal);
+  font-family:var(--ui-font);font-size:var(--fz-tab);font-weight:600;color:#23231F;
+  user-select:text;height:18px;
+}
+/* 溢出提示：把 Tab 自己淡出去，而不是在它上面压一层白色渐变。
+   压白色渐变在半透底衬上会露出一块死白的方块（壁纸被一起盖掉），
+   还跟卡片本身的模糊对不上；直接对内容做 mask，
+   底衬是白、是纸、还是半透模糊，过渡都一样自然。 */
+.tabs-wrap.ovfR .tabs{
+  -webkit-mask-image:linear-gradient(270deg,transparent 0,#000 22px);
+  mask-image:linear-gradient(270deg,transparent 0,#000 22px);
+}
+.tabs-wrap.ovfL .tabs{
+  -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 22px);
+  mask-image:linear-gradient(90deg,transparent 0,#000 22px);
+}
+.tabs-wrap.ovfL.ovfR .tabs{
+  -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 22px,#000 calc(100% - 22px),transparent 100%);
+  mask-image:linear-gradient(90deg,transparent 0,#000 22px,#000 calc(100% - 22px),transparent 100%);
+}
+.newcat{
+  flex:0 0 auto;display:flex;align-items:center;gap:3px;
+  height:22px;padding:0 7px 0 5px;margin-right:0;
+  background:none;border:0;border-radius:6px;cursor:pointer;
+  font-size:var(--fz-mini);font-weight:500;color:var(--teal);
+  transition:background .14s ease,color .14s ease;
+}
+.newcat:hover{background:rgba(60,119,103,.08);color:var(--teal-ink)}
+.newcat svg{display:block}
+
+.hr{height:1px;background:var(--line);flex:0 0 auto;margin:9px 0 0}
+
+/* ══════════ 事项 ══════════ */
+.scroll{
+  flex:0 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;
+  margin:0 -4px;padding:0 4px;
+  scrollbar-width:thin;scrollbar-color:#DCDAD2 transparent;
+  /* 永远给滚动条留出位置：贴合态藏起滚动条、唤醒后又显示，
+     不留位的话按住 Ctrl 的瞬间整列文字会横向挪 10px。 */
+  scrollbar-gutter:stable;
+  overscroll-behavior:contain;
+  /* 关掉 Chromium 的滚动锚定：它会为了「保持可见内容不动」自己改 scrollTop。
+     卡片高度一变（按住 Ctrl 唤起 / 收回去）它就把清单往上或往下顶一截，
+     看起来就像「我什么都没滚，列表自己跳了」。
+     位置只由滚轮和手指决定 —— 唤醒 / 置顶态一律不做纠正。 */
+  overflow-anchor:none;
+  /* 清单视口自己封顶，不靠卡片高度去夹：
+     未唤起 / 唤起两态之间卡片高度会差 81px（底部操作层收放），
+     若让卡片去限制，切换的那一帧视口会先变大再被夹回去，
+     滚动位置被顺带挤一下 —— 那一下看起来就是「回弹」。 */
+  max-height:calc(var(--maxh) - 158px);
+  /* 空间不够时，先缩清单、后缩折叠区：抽屉一掀开就要能看见东西，
+     不能因为上面还挂着几十条待办就把抽屉压成一条缝。
+     shrink 权重 6 对 1，溢出基本全由清单吃掉。 */
+  flex:0 6 auto;
+}
+.scroll::-webkit-scrollbar{width:6px}
+.scroll::-webkit-scrollbar-thumb{background:#DCDAD2;border-radius:3px;border:1.5px solid transparent;background-clip:content-box}
+.scroll::-webkit-scrollbar-track{background:transparent}
+/* 滚动条只在「字直接压在壁纸上」时藏起来：那条灰杠在桌面上太扎眼。
+   藏的时候只把滑块变透明、位置照样留着，这样唤醒前后文字不会横跳。 */
+body.canvas .scroll{scrollbar-color:transparent transparent}
+body.canvas .scroll::-webkit-scrollbar-thumb{background:transparent}
+
+/* 列表留白的「账」要算清楚：
+   一行占 27px（.row 高度）+ 1px 间隙 = 28px 的节奏；
+   文字行盒是 fz-item × 字号倍率 × 1.5，在「特大」下是 24.18px。
+   于是两条文字之间的空白 = 28 − 24.18 ≈ 3.8px，
+   而首行文字上方只有行盒自己那点半像素余量（27 − 24.18)/2 ≈ 1.4px ——
+   这就是「上边距看起来只有行间一半」的原因。
+   补法：让首行上方的空白和行间空白相等，即
+     pad = (28 − LH) − (27 − LH)/2 = (29 − LH)/2
+   用 calc 跟着字号倍率算，换字号也不会又不一致。
+   下边距保持 0：滚到底时最后一行仍然贴着下边缘，不会多出一条空行。 */
+.list{
+  display:flex;flex-direction:column;gap:1px;margin:0;list-style:none;
+  --row-lh:calc(var(--fz-item) * var(--is) * 1.5);
+  padding:max(0px, calc(14.5px - var(--row-lh) / 2)) 0 0;
+}
+.spacer{height:0;pointer-events:none}
+.row{
+  display:flex;align-items:center;gap:10px;
+  height:27px;padding:0 4px;border-radius:6px;
+  transition:background .13s ease;
+}
+.row:hover{background:rgba(30,30,26,.032)}
+/* 没有底衬时，悬停高亮等于在壁纸上刷一块灰 —— 只在有底衬时才画 */
+body.canvas .row:hover{background:transparent}
+.box{
+  flex:0 0 auto;width:14px;height:14px;padding:0;
+  border:1.35px solid #D2CFC5;border-radius:4px;
+  background:transparent;cursor:pointer;
+  transition:border-color .14s ease,background .14s ease,transform .1s ease;
+}
+/* 勾选框：底衬是白的就给一点点白，让边框有依托；
+   只要是「通透」——
+   不管是未唤起的通透，还是唤起后依然通透 —— 一律透明，
+   桌面上的一个小白方块比什么都扎眼 */
+body:not(.pinned) .box{background:transparent}
+body:not(.pinned)[data-idle="white"]:not(.wake) .box,
+body:not(.pinned)[data-idle="paper"]:not(.wake) .box{background:rgba(255,255,255,.66)}
+body:not(.pinned).wake[data-backing="white"] .box,
+body:not(.pinned).wake[data-backing="paper"] .box,
+body:not(.pinned).wake[data-backing="veil"] .box{background:rgba(255,255,255,.66)}
+body.pinned .box{background:transparent}
+.box:hover{border-color:var(--teal);background:var(--teal-soft)}
+.box:active{transform:scale(.88)}
+.txt{
+  flex:1;min-width:0;cursor:text;
+  font-family:var(--font);
+  font-size:calc(var(--fz-item) * var(--is));
+  font-weight:var(--item-fw);font-style:var(--item-fs);
+  line-height:1.5;color:var(--ink);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+/* 就地改文字：字体字重跟正文一模一样，只多一条青色下划线，
+   免得「一进入编辑，字就换了个样子」。 */
+.row .txi{
+  flex:1;min-width:0;padding:0;height:20px;
+  border:0;outline:0;background:none;
+  border-bottom:1px solid var(--teal);
+  font-family:var(--font);
+  font-size:calc(var(--fz-item) * var(--is));
+  font-weight:var(--item-fw);font-style:var(--item-fs);
+  color:var(--ink);
+  user-select:text;
+}
+body.canvas .row .txi{color:var(--item-ink)}
+body.canvas.halo .row .txi{
+  text-shadow:0 0 1.5px var(--halo),0 1px 3px var(--halo);
+}
+.row.editing:hover{background:transparent}
+/* 「文字颜色」只在 贴合态 · 未唤起 · 通透底衬 这一种情形下生效：
+   那时文字是直接压在壁纸上的，才需要用户自己挑一个看得清的颜色。
+   一旦有了白/纸底衬，就回到默认墨色，以免白底上打浅字。 */
+body.canvas .txt{color:var(--item-ink)}
+/* 文字光晕：同样只给这种情形，而且只给待办文字本身（Tab / 已完成 / 按钮都不带） */
+body.canvas.halo .txt,
+body.canvas.halo .blank,
+body.canvas.halo .draft input{
+  text-shadow:0 0 1.5px var(--halo),0 1px 3px var(--halo);
+}
+.row.leaving{animation:leave .17s ease forwards}
+@keyframes leave{to{opacity:0;transform:translateX(6px)}}
+.row.entering{animation:enter .17s ease}
+@keyframes enter{from{opacity:0;transform:translateY(-4px)}}
+
+/* 空状态 */
+.blank{
+  display:flex;align-items:center;height:27px;padding:0 4px 0 24px;
+  font-family:var(--font);
+  font-size:calc(var(--fz-item) * var(--is));color:#B6B4AB;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+
+/* 新建输入 */
+.draft{
+  display:flex;align-items:center;gap:10px;height:27px;padding:0 4px;
+}
+.draft .ghostbox{
+  flex:0 0 auto;width:14px;height:14px;border:1.35px dashed #CFCCC2;border-radius:4px;
+  background:transparent;
+}
+.draft input{
+  flex:1;min-width:0;border:0;outline:0;background:none;
+  font-family:var(--font);
+  font-size:calc(var(--fz-item) * var(--is));
+  font-weight:var(--item-fw);font-style:var(--item-fs);
+  color:var(--ink);padding:0;height:20px;
+  border-bottom:1px solid var(--teal);
+  user-select:text;
+}
+.draft input::placeholder{color:var(--ink-6)}
+
+/* ══════════ 新增一条 ══════════ */
+.add{
+  display:flex;align-items:center;gap:8px;
+  height:26px;padding:0 4px;margin-top:1px;
+  background:none;border:0;border-radius:6px;cursor:pointer;
+  flex:0 0 auto;
+  transition:background .14s ease,height .15s ease,margin .15s ease;
+}
+.add:hover{background:rgba(60,119,103,.07)}
+body:not(.pinned) .add:hover{background:rgba(60,119,103,.07)}
+.add .plus{
+  flex:0 0 auto;width:15px;height:15px;border-radius:50%;
+  background:var(--teal);display:grid;place-items:center;
+  transition:transform .14s cubic-bezier(.34,1.4,.64,1);
+}
+.add:hover .plus{transform:scale(1.1)}
+.add span{font-size:var(--fz-fold);font-weight:500;color:var(--teal)}
+
+/* ══════════ 折叠条 ══════════ */
+/* 折叠条永远贴着卡片底部：卡片被拉高、内容不够时，多出来的空白留在
+   「新增一条」和折叠条之间，而不是吊在折叠条下方。
+   margin-top:auto 吃掉多余空间；一旦空间不够（抽屉展开），
+   它自己先缩，抽屉在内部滚 —— 两个方向都不会把卡片撑爆。
+   min-height 兜住两行折叠条本身，缩到底也不会把「已完成 / 已归档」吃掉。 */
+.folds{display:flex;flex-direction:column;flex:0 1 auto;min-height:64px;
+  margin-top:auto;padding-top:6px;overflow:hidden;
+  transition:height .15s ease,margin .15s ease}
+/* 抽屉一展开就给它一个像样的高度：否则清单长的时候抽屉会被压成一条缝，
+   能滚也看不清。卡片本身很矮时按 45% 收口，不至于把卡片顶穿。 */
+.folds:has(.drawer){min-height:min(124px, 45%)}
+.fold{
+  display:flex;align-items:center;gap:9px;width:100%;
+  height:25px;padding:0 4px;flex:0 0 auto;
+  background:none;border:0;border-radius:6px;cursor:pointer;
+  text-align:left;
+  transition:background .14s ease;
+}
+.fold:hover{background:rgba(30,30,26,.032)}
+.fold .ico{flex:0 0 auto;width:14px;height:14px;display:grid;place-items:center;color:#9C9A92}
+.fold .lb{
+  flex:1;min-width:0;
+  font-size:var(--fz-fold);font-weight:500;color:var(--ink-3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.fold .n{font-weight:400;color:var(--ink-5);margin-left:4px}
+.fold .chev{flex:0 0 auto;display:grid;place-items:center;color:#B7B5AC;transition:transform .2s cubic-bezier(.4,0,.2,1)}
+.fold[data-open="1"] .chev{transform:rotate(180deg)}
+.fold.arch .lb{color:var(--ink-3)}
+.grp{height:1px;background:var(--line-2);margin:5px 4px;flex:0 0 auto}
+/* 贴合态：分隔线也透掉，别在桌面上横一道浅色 */
+/* 分隔线只在「有一层底衬」时画；贴在壁纸上时横一道浅色反而脏 */
+body.wake:not(.canvas) .grp{background:rgba(30,30,26,.07)}
+body.canvas .grp{background:transparent}
+
+/* ══════════ 溢出提示 ══════════
+   风格：没有底衬、没有胶囊，就是一行和待办同色同号的字，左边与清单文字对齐。
+   位置落在清单上下那道看不见的边缘（贴合态里 Tab 与「新增一条」占着但透明），
+   所以它不会压住任何一条待办。 */
+.hint{
+  position:absolute;left:0;right:0;display:flex;justify-content:flex-start;
+  padding-left:43px;   /* 15 卡片内边距 + 4 行内边距 + 14 勾选框 + 10 间距 */
+  pointer-events:none;opacity:0;transition:opacity .18s ease;
+  font-family:var(--font);
+  font-size:calc(var(--fz-item) * var(--is));
+  font-weight:var(--item-fw);line-height:1.2;
+  color:var(--item-ink);
+  z-index:4;
+}
+.hint.on{opacity:1}
+.hint i{font-style:normal}
+/* 操作层一浮出来，这块地方就被 Tab / 新增一条占了，提示自动让位 */
+body.wake .hint,body.pinned .hint{opacity:0 !important}
+body.pinned .hint{display:none}
+
+/* ══════════ 抽屉 ══════════ */
+/* 已完成几十条、归档好几个分类时，抽屉不能把卡片顶穿。
+   它自己变成一段可滚的容器：高度不够就在内部滚，滚到头也不再往外顶。 */
+.drawer{
+  display:flex;flex-direction:column;gap:1px;
+  padding:9px 8px 8px;
+  background:var(--drawer);
+  border-radius:9px;
+  box-shadow:inset 0 0 0 1px rgba(30,30,26,.04);
+  margin:2px 0 4px;
+  animation:drop .18s cubic-bezier(.2,.8,.3,1);
+  flex:0 1 auto;min-height:52px;
+  max-height:min(240px, calc(var(--maxh) - 190px));
+  overflow-y:auto;overflow-x:hidden;
+  overscroll-behavior:contain;
+  scrollbar-width:thin;scrollbar-color:#DCDAD2 transparent;
+}
+.drawer::-webkit-scrollbar{width:6px}
+.drawer::-webkit-scrollbar-thumb{background:#DCDAD2;border-radius:3px;border:1.5px solid transparent;background-clip:content-box}
+.drawer::-webkit-scrollbar-track{background:transparent}
+/* 抽屉里的每一行都不许被压扁 —— 要滚的是容器，不是行 */
+.drawer > *{flex:0 0 auto}
+body[data-tone="paper"] .drawer{background:#F4F2EC}
+/* 贴合态没有卡片底衬，抽屉也不能自带一块白 —— 一透到底，只留分组线 */
+body.canvas .drawer{background:transparent;box-shadow:none}
+/* 和清单一样：字直接压在壁纸上时，抽屉的滚动条也不该露出来 */
+body.canvas .drawer{scrollbar-color:transparent transparent}
+body.canvas .drawer::-webkit-scrollbar-thumb{background:transparent}
+body.canvas .drow:hover,
+body.canvas .arow:hover{background:transparent}
+@keyframes drop{from{opacity:0;transform:translateY(-5px)}}
+.dhead{display:flex;align-items:center;gap:8px;padding:0 2px 5px;cursor:pointer}
+.dhead .lb{flex:1;font-size:var(--fz-mini);font-weight:600;color:var(--ink-3);letter-spacing:.02em}
+.dhead .act{
+  font-size:var(--fz-mini);color:var(--ink-5);background:none;border:0;padding:2px 4px;
+  border-radius:4px;cursor:pointer;transition:color .13s ease,background .13s ease;
+}
+.dhead .act:hover{color:var(--ink-3);background:rgba(30,30,26,.05)}
+.drow{display:flex;align-items:center;gap:8px;height:22px;padding:0 2px;border-radius:5px}
+.drow:hover{background:rgba(30,30,26,.03)}
+.dbox{
+  flex:0 0 auto;width:11px;height:11px;border-radius:3px;
+  background:var(--teal);border:0;cursor:pointer;padding:0;
+  transition:transform .1s ease;
+}
+.dbox:active{transform:scale(.85)}
+.dtx{
+  flex:1;min-width:0;font-size:var(--fz-drawer);font-style:normal;color:var(--ink-4);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.rst{
+  flex:0 0 auto;background:none;border:0;padding:1px 4px;border-radius:4px;cursor:pointer;
+  font-size:var(--fz-mini);color:var(--ink-6);
+  opacity:0;transition:opacity .13s ease,color .13s ease;
+}
+.drow:hover .rst{opacity:1}
+.rst:hover{color:var(--teal);background:rgba(60,119,103,.08)}
+.dempty{font-size:var(--fz-mini);color:var(--ink-6);padding:2px 4px 3px}
+
+.arow{display:flex;align-items:center;gap:7px;height:24px;padding:0 2px;border-radius:5px}
+.arow:hover{background:rgba(30,30,26,.03)}
+.arow .caret{
+  flex:0 0 auto;width:12px;height:12px;display:grid;place-items:center;
+  background:none;border:0;padding:0;cursor:pointer;color:#A9A79E;
+}
+.arow .caret svg{transition:transform .18s cubic-bezier(.4,0,.2,1)}
+.arow[data-open="1"] .caret svg{transform:rotate(90deg)}
+.arow .name{
+  flex:1;min-width:0;font-size:var(--fz-drawer);color:var(--ink-2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;
+}
+.arow .meta{flex:0 0 auto;font-size:var(--fz-mini);color:var(--ink-6)}
+.arow .ra,.arow .rd{
+  flex:0 0 auto;background:none;border:0;padding:1px 4px;border-radius:4px;cursor:pointer;
+  font-size:var(--fz-mini);opacity:.42;transition:opacity .13s ease,background .13s ease;
+}
+.arow:hover .ra,.arow:hover .rd{opacity:1}
+.arow .ra{color:var(--teal)}
+.arow .rd{color:var(--red)}
+.arow .ra:hover{background:rgba(60,119,103,.08)}
+.arow .rd:hover{background:rgba(180,69,58,.08)}
+.aitem{display:flex;align-items:center;gap:7px;height:21px;padding-left:19px}
+.aitem .dbox{width:10px;height:10px;border-radius:2.5px;background:transparent;border:1.25px solid #D3D0C6;cursor:default}
+.aitem .dbox.on{background:var(--teal);border-color:var(--teal)}
+.aitem .dtx{color:var(--ink-3)}
+.aitem .dtx.done{color:var(--ink-5)}
+
+/* ══════════ 尺寸把手 ══════════
+   把手只留光标提示（ew/ns/nwse-resize），不画任何线：
+   以前悬停会浮出一条青色细线，看起来像卡片边缘多长了一根边，
+   拖的时候注意力全被那根线拽走。热区照旧是 7px，够好抓。 */
+.grip{position:absolute;z-index:6}
+.grip-r{top:14px;bottom:14px;right:0;width:7px;cursor:ew-resize}
+.grip-b{left:14px;right:14px;bottom:0;height:7px;cursor:ns-resize}
+.grip-c{right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize}
+body:not(.pinned) .grip{display:none}
+body.settings .grip{display:none}
+body.probe .card{width:380px !important;max-height:none !important}
+body.probe .pbox{width:440px !important;height:600px !important}
+
+/* ══════════ 菜单 ══════════ */
+.menu{
+  position:fixed;z-index:60;min-width:212px;
+  background:var(--card);border-radius:10px;
+  box-shadow:0 0 0 .5px rgba(30,30,26,.1),0 12px 32px -8px rgba(30,30,26,.22),0 2px 6px rgba(30,30,26,.06);
+  padding:5px;animation:drop .13s cubic-bezier(.2,.8,.3,1);
+}
+.menu button{
+  display:flex;flex-direction:column;gap:2px;width:100%;
+  background:none;border:0;padding:7px 9px;border-radius:6px;
+  cursor:pointer;text-align:left;transition:background .12s ease;
+}
+.menu button:hover{background:#F6F4EE}
+.menu .k{font-size:11.5px;font-weight:500;color:var(--ink)}
+.menu .k.danger{color:var(--red)}
+.menu .d{font-size:9.5px;color:var(--ink-5);line-height:1.4}
+
+/* ══════════ 确认框 ══════════ */
+/* 遮罩只盖卡片这一块。
+   窗口本身比卡片大一圈（body 有 20px 内边距，那部分是全透明的），
+   inset:0 会把外面那圈留白也刷成半透明灰 —— 贴在桌面上就是
+   卡片四边多出一圈脏边。inset 跟着 body 内边距走，圆角对齐卡片。 */
+.modal-mask{
+  position:fixed;inset:20px;z-index:70;background:rgba(30,30,26,.16);
+  border-radius:12px;
+  display:grid;place-items:center;animation:fade .14s ease;padding:24px;
+}
+@keyframes fade{from{opacity:0}}
+.modal{
+  width:100%;max-width:350px;background:var(--card);border-radius:13px;padding:19px;
+  box-shadow:0 0 0 .5px rgba(30,30,26,.1),0 28px 64px -16px rgba(30,30,26,.34);
+  animation:drop .16s cubic-bezier(.2,.8,.3,1);
+}
+.modal h3{margin:0 0 9px;font-size:13.5px;font-weight:600;color:var(--ink);letter-spacing:.01em}
+.modal p{margin:0;font-size:11.5px;line-height:1.75;color:var(--ink-3)}
+.modal .btns{display:flex;justify-content:flex-end;gap:7px;margin-top:19px}
+.modal button{
+  font-size:11.5px;padding:6px 12px;border-radius:7px;cursor:pointer;
+  border:1px solid transparent;transition:background .13s ease,color .13s ease;
+}
+.btn-ghost{background:none;color:var(--ink-3);border-color:var(--line-2)}
+.btn-ghost:hover{background:#F6F4EE}
+.btn-alt{background:none;color:var(--teal);border-color:#CFE0D9}
+.btn-alt:hover{background:#F1F6F3}
+.btn-danger{background:var(--red);color:#fff}
+.btn-danger:hover{filter:brightness(1.07)}
+
+/* ══════════ 设置面板 ══════════
+   不是盖在待办上的一层遮罩，也不是把卡片挤走的一块板子：
+   面板并排贴在卡片旁边（右侧优先，右边放不下就贴左侧），
+   卡片的位置一个像素都不动。面板高度跟着内容走，内容短就短，
+   不会拖出一大片空白；内容太长就在面板内部滚动。 */
+.panel{
+  position:relative;z-index:80;
+  display:none;
+  flex:0 0 var(--pw,340px);width:var(--pw,340px);
+  align-self:flex-start;
+}
+body.settings{display:flex;align-items:flex-start;gap:12px}
+body.settings.panel-left{flex-direction:row-reverse}
+body.settings > .card{
+  flex:0 0 auto;width:var(--cw,380px) !important;
+  align-self:flex-start;
+}
+body.settings .panel{display:flex}
+.pbox{
+  flex:1;min-width:0;height:auto;max-height:calc(100vh - 40px);
+  background:var(--card);border-radius:13px;
+  box-shadow:0 0 0 1px rgba(30,30,26,.07);
+  display:flex;flex-direction:column;overflow:hidden;
+  animation:drop .18s cubic-bezier(.2,.8,.3,1);
+}
+body[data-tone="paper"] .pbox{background:var(--card-paper)}
+.phead{
+  display:flex;align-items:center;gap:8px;
+  padding:15px 16px 13px;border-bottom:1px solid var(--line);flex:0 0 auto;
+  cursor:grab;
+}
+.phead:active{cursor:grabbing}
+.phead h2{margin:0;font-size:14.5px;font-weight:600;color:var(--ink);letter-spacing:.01em}
+.phead .sp{flex:1}
+.pclose{
+  width:26px;height:26px;display:grid;place-items:center;
+  background:none;border:0;border-radius:7px;cursor:pointer;
+  color:var(--ink-4);transition:background .13s ease,color .13s ease;
+}
+.pclose:hover{background:#F2F0E9;color:var(--ink)}
+.pbody{flex:1;min-height:0;overflow-y:auto;padding:8px 16px 22px;
+  -webkit-mask-image:linear-gradient(180deg,#000 0,#000 calc(100% - 18px),rgba(0,0,0,.08) 100%);}
+.pbody::-webkit-scrollbar{width:7px}
+.pbody::-webkit-scrollbar-thumb{background:#DCDAD2;border-radius:4px;border:2px solid transparent;background-clip:content-box}
+
+.sec{margin-top:15px}
+.sec:first-child{margin-top:10px}
+.sec h4{
+  margin:0 0 7px;font-size:10px;font-weight:600;color:var(--ink-5);
+  letter-spacing:.08em;text-transform:uppercase;
+}
+.field{
+  display:flex;align-items:center;gap:12px;min-height:36px;
+  padding:4px 0;border-bottom:1px solid #F4F2EC;
+}
+.field:last-child, .field:has(+ .hkerr){border-bottom:0}
+.field .fl{flex:1;min-width:0}
+.field .fl b{display:block;font-size:12px;font-weight:500;color:var(--ink);line-height:1.4}
+.field .fl i{display:block;font-size:10px;color:#9C9A92;font-style:normal;line-height:1.35;margin-top:1px}
+
+select.sel{
+  appearance:none;-webkit-appearance:none;
+  height:27px;padding:0 24px 0 9px;
+  background:#F7F5EF url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 3.6L5 6.6l3-3' stroke='%238C8A82' stroke-width='1.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>") no-repeat right 8px center;
+  border:1px solid var(--line-2);border-radius:7px;
+  font-family:var(--ui-font);font-size:11px;color:var(--ink-2);
+  cursor:pointer;outline:0;max-width:150px;
+}
+select.sel:hover{border-color:#D5D2C8}
+/* 快捷键录制的报错：平时不占位置，只有真出错时才撑出来一行 */
+.hkerr{display:none;font-size:10px;line-height:1.5;color:var(--red);padding:5px 0 0}
+.hkerr.on{display:block}
+
+.seg{display:flex;background:#F2F0E9;border-radius:7px;padding:2px;gap:1px}
+.seg button{
+  border:0;background:none;padding:4px 9px;border-radius:5px;cursor:pointer;
+  font-size:10.5px;color:var(--ink-3);transition:background .14s ease,color .14s ease,box-shadow .14s ease;
+}
+.seg button[data-on="1"]{background:#fff;color:var(--ink);font-weight:500;box-shadow:0 1px 2px rgba(30,30,26,.1)}
+.seg button:hover:not([data-on="1"]){color:var(--ink-2)}
+
+.sw{
+  position:relative;flex:0 0 auto;width:36px;height:21px;border-radius:11px;
+  background:#DFDCD3;border:0;cursor:pointer;padding:0;
+  transition:background .18s ease;
+}
+.sw::after{
+  content:"";position:absolute;top:2.5px;left:2.5px;width:16px;height:16px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 3px rgba(30,30,26,.22);
+  transition:transform .18s cubic-bezier(.3,1.3,.6,1);
+}
+.sw[data-on="1"]{background:var(--teal)}
+.sw[data-on="1"]::after{transform:translateX(15px)}
+
+.swatches{display:flex;align-items:center;gap:5px;flex:0 0 auto}
+.sw-dot{
+  width:16px;height:16px;border-radius:50%;border:0;cursor:pointer;padding:0;
+  box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.9),0 0 0 1px rgba(30,30,26,.14);
+  transition:transform .13s ease,box-shadow .13s ease;
+}
+.sw-dot:hover{transform:scale(1.14)}
+.sw-dot[data-on="1"]{box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.95),0 0 0 1px #fff,0 0 0 2.5px var(--teal)}
+.sw-pick{
+  width:16px;height:16px;padding:0;border:1px solid var(--line-2);border-radius:50%;
+  background:conic-gradient(#B4453A,#C08A2E,#3C7767,#3B5D8C,#B4453A);
+  cursor:pointer;position:relative;overflow:hidden;flex:0 0 auto;
+}
+.sw-pick input{position:absolute;inset:-4px;opacity:0;cursor:pointer}
+
+.rng{
+  -webkit-appearance:none;appearance:none;width:118px;height:3px;border-radius:2px;
+  background:#E4E1D8;outline:0;cursor:pointer;
+}
+.rng::-webkit-slider-thumb{
+  -webkit-appearance:none;width:13px;height:13px;border-radius:50%;
+  background:#fff;border:1.5px solid var(--teal);cursor:pointer;
+  box-shadow:0 1px 3px rgba(30,30,26,.18);
+}
+.rngv{font-size:10px;color:var(--ink-4);min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
+
+.kbd{
+  display:inline-flex;align-items:center;height:18px;padding:0 5px;
+  background:#F4F2EC;border:1px solid var(--line-2);border-radius:4px;
+  font-size:9.5px;color:var(--ink-3);font-family:var(--ui-font);
+  box-shadow:0 1px 0 rgba(30,30,26,.05);
+}
+.hkey{
+  display:inline-flex;align-items:center;gap:3px;height:24px;padding:0 8px;
+  background:#F7F5EF;border:1px solid var(--line-2);border-radius:7px;
+  font-family:var(--ui-font);font-size:10.5px;color:var(--ink-2);
+  cursor:pointer;transition:background .13s ease,border-color .13s ease;
+  white-space:nowrap;
+}
+.hkey:hover{background:#F2F0E9;border-color:#D5D2C8}
+.hkey.rec{background:#FFF6E8;border-color:#E2C08A;color:#8A6218}
+.hkey.err{border-color:#E0B4AE;background:#FDF2F0;color:var(--red)}
+.pfoot{
+  flex:0 0 auto;padding:11px 16px;border-top:1px solid var(--line);
+  display:flex;align-items:center;gap:8px;
+}
+.pfoot .sp{flex:1}
+.pfoot button{
+  font-size:11px;padding:6px 11px;border-radius:7px;cursor:pointer;
+  background:none;border:1px solid var(--line-2);color:var(--ink-3);
+  transition:background .13s ease,color .13s ease;
+}
+.pfoot button:hover{background:#F6F4EE;color:var(--ink)}
+.pfoot .ver{font-size:9.5px;color:var(--ink-6);letter-spacing:.2px}
+/* 作者名比版本号再重一档，让人一眼看出这是署名而不是产品名的一部分 */
+.pfoot .ver .auth{color:var(--ink-4);font-weight:500}
+</style>
+</head>
+<body data-tone="white">
+  <div class="card" id="card">
+    <div class="head op" id="head">
+      <div class="tabs-wrap" id="tabsWrap">
+        <div class="tabs" id="tabs"></div>
+      </div>
+      <button class="newcat" data-act="newcat" id="newcat"></button>
+    </div>
+    <div class="hr op" id="hr"></div>
+    <div class="scroll" id="scroll"><ul class="list" id="list"></ul><div class="spacer" id="spacer"></div></div>
+    <button class="add op" data-act="add" id="add"><span class="plus" id="addPlus"></span><span>新增一条</span></button>
+    <div class="folds op" id="folds"></div>
+    <div class="hint hint-t" id="hintT"></div>
+    <div class="hint hint-b" id="hintB"></div>
+    <div class="grip grip-r" id="gripR"></div>
+    <div class="grip grip-b" id="gripB"></div>
+    <div class="grip grip-c" id="gripC"></div>
+  </div>
+
+  <div class="panel" id="panel">
+    <div class="pbox">
+      <div class="phead" id="phead">
+        <h2>设置</h2>
+        <span class="sp"></span>
+        <button class="pclose" data-act="closeSettings" id="pclose"></button>
+      </div>
+      <div class="pbody" id="pbody"></div>
+      <div class="pfoot">
+        <button data-act="resetPrefs">恢复默认</button>
+        <span class="sp"></span>
+        <span class="ver"><span class="auth">WoBok</span> · Desk List <span id="verNum">1.5.5</span></span>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ═══════════ 与 Rust 的桥 ═══════════ */
+const HAS_T = !!(window.__TAURI__ && window.__TAURI__.core);
+const invoke = (cmd, args) => HAS_T ? window.__TAURI__.core.invoke(cmd, args) : Promise.resolve(null);
+const listen = (ev, cb) => HAS_T ? window.__TAURI__.event.listen(ev, e => cb(e.payload)) : null;
+/* 抓现场：前端任何未捕获错误都写进 %TEMP%\desklist.log */
+window.addEventListener("error", e => invoke("dbg", { msg: `${e.message} @${e.lineno}:${e.colno}` }));
+window.addEventListener("unhandledrejection", e => invoke("dbg", { msg: "REJ " + (e.reason && e.reason.message || e.reason) }));
+
+/* ═══════════ 图标 ═══════════ */
+const ICO = {
+  /* 已完成：圆圈 + 勾，1.15 描边 */
+  done(color="currentColor"){
+    return `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="${color}" stroke-width="1.15"/><path d="M4.35 7.15L6.1 8.9L9.7 5.2" stroke="${color}" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  },
+  /* 已归档：箱盖 + 箱体 + 拉手，同一套描边语言 */
+  arch(color="currentColor"){
+    return `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="2.6" y="3.1" width="8.8" height="2.1" rx=".85" stroke="${color}" stroke-width="1.15"/><path d="M3.55 5.2V10c0 .72.58 1.3 1.3 1.3h4.3c.72 0 1.3-.58 1.3-1.3V5.2" stroke="${color}" stroke-width="1.15" stroke-linejoin="round"/><path d="M5.9 7.5h2.2" stroke="${color}" stroke-width="1.15" stroke-linecap="round"/></svg>`;
+  },
+  plus(size=9, color="currentColor"){
+    return `<svg width="${size}" height="${size}" viewBox="0 0 10 10" fill="none"><path d="M5 1.5v7M1.5 5h7" stroke="${color}" stroke-width="1.4" stroke-linecap="round"/></svg>`;
+  },
+  chev(on, color="currentColor"){
+    const d = on ? "M2.5 7.1L6 3.6l3.5 3.5" : "M2.5 4.4L6 7.9l3.5-3.5";
+    return `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="${d}" stroke="${color}" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  },
+  caret(color="currentColor"){
+    return `<svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M3 1.6L6 4.5L3 7.4" stroke="${color}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  },
+  close(color="#8C8A82"){
+    return `<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2.2 2.2l6.6 6.6M8.8 2.2l-6.6 6.6" stroke="${color}" stroke-width="1.3" stroke-linecap="round"/></svg>`;
+  }
+};
+
+/* ═══════════ 设置项定义 ═══════════ */
+const FONTS = {
+  system:  {label:"系统默认", css:'"Noto Sans SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif'},
+  yahei:   {label:"微软雅黑", css:'"Microsoft YaHei","PingFang SC","Noto Sans SC",sans-serif'},
+  dengxian:{label:"等线",     css:'"DengXian","等线","Microsoft YaHei",sans-serif'},
+  sarasa:  {label:"更纱黑体", css:'"Sarasa Gothic SC","Sarasa UI SC","Noto Sans SC",sans-serif'},
+  inter:   {label:"Inter",    css:'"Inter","Segoe UI","Noto Sans SC","Microsoft YaHei",sans-serif'}
+};
+const INKS  = ["#000000","#23231F","#3A3A34","#24324A","#1E3D35"];
+const HALOS = ["#000000","#FFFFFF","#FFF6E4","#E8F0EC","#DCE6F2"];
+
+const DEFAULT_PREFS = {
+  font:"dengxian", scale:1.24, weight:600, italic:false,
+  ink:"#000000", haloColor:"#000000",
+  tone:"paper", halo:true, ring:true,
+  /* idle   = 贴合态「未唤起」时贴桌面的底衬（纯白 / 纸白 / 通透）
+     backing = 贴合态「唤起」时浮起来的那层底衬（纯白 / 纸白 / 半透 / 通透） */
+  idle:"none", backing:"veil",
+  maxH:620, autostart:false,
+  prefsVer:3,
+  hkPin:{mods:["Ctrl","Alt"], code:"KeyD"},
+  hkAdd:{mods:["Ctrl","Alt"], code:"KeyN"}
+};
+/* 以前的 `paper` 是「纸白半透」那一档，显示层每帧都被映射成 `veil`，
+   于是用户点了「纸白」看到的永远是半透。现在纸白就是纸白（不透明），
+   半透独立成 `veil`，两者不再互相冒充。
+   老数据里真正落盘的只会是 veil / white（paper 从来没能显示出来），
+   所以迁移只处理两个遗留字面量，不去动用户这次选的档。 */
+function migratePrefs(P){
+  const o = Object.assign({...DEFAULT_PREFS}, P || {});
+  const old = Number(o.prefsVer) || 1;
+  if(old < 2){
+    /* v2：出厂观感整体换了一版（等线 / 特大 / 加粗 / 纯黑字 / 黑光晕 /
+       唤醒半透 / 卡片纸白）。只迁一次，且只迁「看得见」的那几项，
+       高度上限、开机启动、快捷键这些用户真正配置过的东西原样保留。 */
+    Object.assign(o, {
+      font:"dengxian", scale:1.24, weight:600, italic:false,
+      ink:"#000000", haloColor:"#000000",
+      tone:"paper", halo:true, idle:"none", backing:"veil"
+    });
+  }
+  if(old < 3){
+    /* 更早的名字；以及唤醒底衬里取消掉的「通透」那一档 */
+    if(o.backing === "frost") o.backing = "white";
+    if(o.backing === "none") o.backing = "veil";
+  }
+  o.prefsVer = 3;
+  if(!o.idle) o.idle = "none";
+  return o;
+}
+
+/* ═══════════ 数据 ═══════════ */
+const KEY = "desklist.v2";
+const seed = () => ({
+  cats:[
+    {id:"c1", name:"工作", items:[
+      {id:"i1", text:"写周报交上去", done:false},
+      {id:"i2", text:"回邮件给客户", done:false},
+      {id:"i3", text:"交季度预算表给财务", done:false},
+      {id:"i4", text:"整理这周的会议纪要", done:true, at:3},
+      {id:"i5", text:"把设计稿链接发给工程师", done:true, at:2},
+      {id:"i6", text:"回复 3 条设计意见", done:true, at:1}
+    ]},
+    {id:"c2", name:"生活", items:[
+      {id:"j1", text:"取快递", done:false},
+      {id:"j2", text:"约牙医", done:false}
+    ]},
+    {id:"c3", name:"阅读", items:[
+      {id:"k1", text:"读《设计中的设计》第 4 章", done:false}
+    ]}
+  ],
+  archived:[
+    {id:"a1", name:"旧项目", items:[
+      {id:"a1-1", text:"整理旧项目的交接文档", done:false},
+      {id:"a1-2", text:"归档旧版原型文件", done:true}
+    ]},
+    {id:"a2", name:"2025 年计划", items:[
+      {id:"a2-1", text:"季度复盘", done:false}
+    ]}
+  ],
+  active:"c1",
+  openDone:false,
+  openArch:false,
+  expanded:["a1"],
+  pinned:false,
+  cardW:380,
+  cardH:null,
+  prefs:{...DEFAULT_PREFS},
+  seq:100
+});
+
+let S = load();
+S.pinned = HAS_T ? false : true;
+S.prefs = migratePrefs(S.prefs);
+let ctrl = false;
+let hovering = false;
+let draft = null;
+let editing = null;          /* 正在改名的是哪个「分类」 */
+let itemEditing = null;      /* 正在改文字的是哪条「待办」 */
+let panelOpen = false;
+let resizing = false;
+
+function load(){
+  try{
+    const raw = localStorage.getItem(KEY) || localStorage.getItem("desklist.v1");
+    if(!raw) return seed();
+    return Object.assign(seed(), JSON.parse(raw));
+  }catch(e){ return seed(); }
+}
+/* 文件镜像兜底：localStorage 的 setItem 有时「成功」但根本没落盘，
+   下次启动读回来是空的。这时改从 %APPDATA%\DeskList\data.json 恢复，
+   恢复完照常渲染，用户看不到差别（最多早 50ms 显示一次示例数据）。
+   注意：恢复完成前不能写盘，否则会先用示例数据把真数据覆盖掉。 */
+let recoveryPending = true;
+function endRecovery(){
+  if(!recoveryPending) return;
+  recoveryPending = false;
+  /* 恢复之前不要把（可能是示例数据的）尺寸上报出去，
+     否则窗口会被第一次渲染的种子数据尺寸缩掉，再也长不回来 */
+  applyManualHeight();
+  reportHeight();
+  requestAnimationFrame(()=>{ updateHints(); });
+  save();
+}
+function recoverFromFile(){
+  /* localStorage 只当「文件不存在时的备用」，绝不再优先。
+     曾经先判断 localStorage：只要它里面有一份旧快照，就会盖掉磁盘上的新数据，
+     于是用户重启后看到的是几天前的那份清单（分类少了、已完成也不见了）。
+     磁盘 data.json 才是唯一权威。 */
+  let ls = null;
+  try{ ls = localStorage.getItem(KEY) || localStorage.getItem("desklist.v1"); }catch(e){ ls = null; }
+  /* 兜底：IPC 万一没回来，1.5 秒后强制放行，别把上报卡死 */
+  setTimeout(endRecovery, 1500);
+  const use = raw=>{
+    if(!raw || raw.length < 3) return false;
+    let d = null;
+    try{ d = JSON.parse(raw); }catch(e){ return false; }
+    if(!d || !Array.isArray(d.cats) || !d.cats.length) return false;
+    Object.assign(S, d);
+    S.pinned = false;
+    S.prefs = migratePrefs(S.prefs);
+    applyPrefs();
+    render();
+    return true;
+  };
+  Promise.resolve(invoke("load_data")).then(raw=>{
+    if(!use(raw)) use(ls);     /* 文件没了（首次装/被删）才退回 localStorage */
+  }).catch(()=>{ use(ls); }).then(endRecovery);
+}
+function payload(){
+  return {
+    cats:S.cats, archived:S.archived, active:S.active,
+    expanded:S.expanded, seq:S.seq, cardW:S.cardW, cardH:S.cardH,
+    prefs:S.prefs, openDone:S.openDone, openArch:S.openArch
+  };
+}
+function save(){
+  let json = "";
+  try{ json = JSON.stringify(payload()); }catch(e){ return; }
+  /* 磁盘镜像立即写（Rust 侧先写 .tmp 再改名，不会留半截文件）。
+     localStorage 不可靠，只当缓存用，晚 320ms 写一次足够。 */
+  if(!recoveryPending){ try{ invoke("save_data", { json }); }catch(e){} }
+  clearTimeout(save._t);
+  save._t = setTimeout(()=>{ try{ localStorage.setItem(KEY, json); }catch(e){} }, 320);
+}
+window.addEventListener("beforeunload", ()=>{
+  try{ localStorage.setItem(KEY, JSON.stringify(payload())); }catch(e){}
+});
+
+const cat = () => S.cats.find(c=>c.id===S.active) || S.cats[0];
+const doneOf = c => c.items.filter(i=>i.done).sort((a,b)=>(b.at||0)-(a.at||0));
+const todoOf = c => c.items.filter(i=>!i.done);
+const uid = p => p + (++S.seq);
+
+/* ═══════════ 偏好应用 ═══════════ */
+function applyPrefs(){
+  const P = S.prefs, r = document.documentElement.style;
+  r.setProperty("--font", (FONTS[P.font]||FONTS.system).css);
+  /* 字号 / 字重 / 斜体 —— 只落到待办文字上 */
+  r.setProperty("--is", P.scale);
+  r.setProperty("--item-fw", P.weight);
+  r.setProperty("--item-fs", P.italic ? "italic" : "normal");
+  r.setProperty("--item-ink", P.ink);
+  r.setProperty("--halo", P.haloColor || "#FFFFFF");
+  r.setProperty("--maxh", P.maxH + "px");
+  document.body.dataset.tone = P.tone;
+  document.body.dataset.idle = P.idle || "none";
+  document.body.dataset.backing = P.backing || "veil";
+  document.body.classList.toggle("halo", !!P.halo);
+  document.body.classList.toggle("noRing", !P.ring);
+  syncCanvas();
+}
+/* 「文字颜色 / 光晕」只在「字是直接压在壁纸上」时生效：
+   贴合态 + 当时那一层底衬是通透。一旦有白底/纸底托着，
+   就回到默认墨色 —— 白底上打浅字谁也看不清。
+   注意判的是「此刻字后面有没有底」，不是「有没有唤起」：
+   唤起后底衬仍是通透的话，颜色不该突然跳回墨色。 */
+function syncCanvas(){
+  const wake = document.body.classList.contains("wake");
+  const raw = wake ? (S.prefs.backing || "veil") : (S.prefs.idle || "none");
+  document.body.classList.toggle("canvas", !S.pinned && raw === "none");
+}
+
+/* ═══════════ 渲染 ═══════════ */
+const $ = s => document.querySelector(s);
+const esc = s => String(s==null?"":s).replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+const tabsEl = $("#tabs"), listEl = $("#list"), foldEl = $("#folds"), cardEl = $("#card"),
+      scrollEl = $("#scroll"), tabsWrap = $("#tabsWrap");
+
+function render(){
+  renderTabs();
+  renderList();
+  renderFolds();
+  document.body.classList.toggle("pinned", S.pinned);
+  $("#newcat").innerHTML = `${ICO.plus(7)}<span>新建</span>`;
+  $("#addPlus").innerHTML = ICO.plus(9, "#fff");
+  $("#pclose").innerHTML = ICO.close();
+  syncLock();
+  save();
+  requestAnimationFrame(()=>{ reportHeight(); updateHints(); updateTabOverflow(); });
+}
+
+function renderTabs(){
+  tabsEl.innerHTML = S.cats.map(c=>{
+    const on = c.id===S.active;
+    if(editing===c.id){
+      return `<span class="tab" style="pointer-events:none">
+        <input class="ren" id="renInput" value="${esc(c.name)}" autocomplete="off" spellcheck="false">
+      </span>`;
+    }
+    return `<button class="tab" data-on="${on?'1':'0'}" data-act="tab:${c.id}">${esc(c.name)}</button>`;
+  }).join("");
+  if(editing){
+    const inp = $("#renInput");
+    if(inp){
+      inp.focus(); inp.select();
+      inp.onkeydown = e=>{
+        e.stopPropagation();
+        if(e.key==="Enter") commitRename(inp.value);
+        else if(e.key==="Escape"){ editing=null; render(); }
+      };
+      inp.onblur = ()=> commitRename(inp.value);
+    }
+  }
+  requestAnimationFrame(updateTabOverflow);
+}
+
+function renderList(){
+  const c = cat();
+  if(!c){ listEl.innerHTML=""; return; }
+  const todos = todoOf(c);
+
+  let html = todos.map(i=>{
+    /* 正在改的那一条：原地换成输入框，勾选框留着（改字的时候不该跳版式） */
+    if(itemEditing === i.id){
+      return `
+    <li class="row editing" data-item="${i.id}">
+      <button class="box" data-act="check:${i.id}" title="勾掉"></button>
+      <input class="txi" id="txiInput" value="${esc(i.text)}" autocomplete="off"
+             autocorrect="off" autocapitalize="off" spellcheck="false">
+    </li>`;
+    }
+    return `
+    <li class="row" data-item="${i.id}">
+      <button class="box" data-act="check:${i.id}" title="勾掉"></button>
+      <span class="txt" data-act="edit:${i.id}" title="点一下改这条">${esc(i.text)}</span>
+    </li>`;
+  }).join("");
+
+  /* 空分类：一条没有 CheckBox 的占位提示 */
+  if(!todos.length && !(draft && draft.cat===c.id)){
+    html += `<li class="blank">这里还没有待办</li>`;
+  }
+
+  if(draft && draft.cat===c.id){
+    html += `<li class="draft"><span class="ghostbox"></span><input id="draftInput" placeholder="写点什么…"></li>`;
+  }
+  listEl.innerHTML = html;
+
+  /* 改文字：光标落在末尾，Enter 落定、Esc 放弃、点别处也算落定 */
+  if(itemEditing){
+    const inp = $("#txiInput");
+    if(inp){
+      inp.focus();
+      const n = inp.value.length;
+      try{ inp.setSelectionRange(n, n); }catch(e){}
+      inp.onkeydown = e=>{
+        e.stopPropagation();
+        if(e.key==="Enter"){ e.preventDefault(); commitItemEdit(inp.value); }
+        else if(e.key==="Escape"){ itemEditing=null; render(); }
+      };
+      inp.onblur = ()=>{
+        const id = itemEditing;
+        setTimeout(()=>{ if(itemEditing===id) commitItemEdit(inp.value); }, 110);
+      };
+      syncLock();
+    }
+  }
+
+  if(draft && draft.cat===c.id){
+    const inp = $("#draftInput");
+    if(inp){
+      inp.value = draft.text || "";
+      /* 每次渲染换个 field id：WebView2 的「Saved info」是按字段记忆的，
+         不换 id 就会一直弹出上次输入过的老词 */
+      inp.setAttribute("data-k", String(Math.random()).slice(2,9));
+      inp.setAttribute("autocomplete", "off");
+      inp.setAttribute("autocorrect", "off");
+      inp.setAttribute("autocapitalize", "off");
+      inp.setAttribute("spellcheck", "false");
+      inp.focus();
+      inp.oninput = e => { draft.text = e.target.value; };
+      inp.onkeydown = e=>{
+        e.stopPropagation();
+        if(e.key==="Enter"){ e.preventDefault(); commitDraft(); }
+        else if(e.key==="Escape"){ draft=null; render(); }
+      };
+      /* 失焦提交：带对象身份校验，避免「点了新增一条」之后这个延时把新草稿也抹掉 */
+      inp.onblur = ()=>{ const d = draft; setTimeout(()=>{ if(draft===d) commitDraft(); }, 120); };
+    }
+    syncLock();
+  }
+}
+
+function renderFolds(){
+  const c = cat();
+  if(!c){ foldEl.innerHTML=""; return; }
+  const done = doneOf(c), arch = S.archived;
+
+  let html = `<button class="fold" data-act="toggleDone" data-open="${S.openDone?'1':'0'}">
+    <span class="ico">${ICO.done()}</span>
+    <span class="lb">已完成<span class="n">${done.length}</span></span>
+    <span class="chev">${ICO.chev(S.openDone)}</span>
+  </button>`;
+
+  if(S.openDone){
+    html += `<div class="drawer">
+      <div class="dhead" data-act="collapseDone">
+        <span class="lb">已完成 · ${done.length}</span>
+        ${done.length?`<button class="act" data-act="clearDone">清空</button>`:""}
+      </div>
+      ${done.length? done.map(i=>`
+        <div class="drow">
+          <button class="dbox" data-act="uncheck:${i.id}" title="取消勾选"></button>
+          <span class="dtx">${esc(i.text)}</span>
+          <button class="rst" data-act="uncheck:${i.id}">恢复</button>
+        </div>`).join("") : `<div class="dempty">还没有勾掉的事</div>`}
+    </div>`;
+  }
+
+  html += `<div class="grp"></div>
+  <button class="fold arch" data-act="toggleArch" data-open="${S.openArch?'1':'0'}">
+    <span class="ico">${ICO.arch()}</span>
+    <span class="lb">已归档<span class="n">${arch.length}</span></span>
+    <span class="chev">${ICO.chev(S.openArch)}</span>
+  </button>`;
+
+  if(S.openArch){
+    html += `<div class="drawer">
+      <div class="dhead" data-act="collapseArch">
+        <span class="lb">已归档 · ${arch.length}</span>
+        ${arch.length?`<button class="act" data-act="restoreAll">全部恢复</button>`:""}
+      </div>
+      ${arch.length? arch.map(a=>{
+        const open = S.expanded.includes(a.id);
+        return `<div class="arow" data-open="${open?'1':'0'}">
+            <button class="caret" data-act="toggleArchCat:${a.id}">${ICO.caret()}</button>
+            <span class="name" data-act="toggleArchCat:${a.id}">${esc(a.name)}</span>
+            <span class="meta">${a.items.length}</span>
+            <button class="ra" data-act="restoreCat:${a.id}">恢复</button>
+            <button class="rd" data-act="delCat:${a.id}">删除</button>
+          </div>
+          ${open? a.items.map(i=>`
+            <div class="aitem">
+              <span class="dbox ${i.done?'on':''}"></span>
+              <span class="dtx ${i.done?'done':''}">${esc(i.text)}</span>
+            </div>`).join("") : ""}`;
+      }).join("") : `<div class="dempty">没有归档的分类</div>`}
+    </div>`;
+  }
+
+  foldEl.innerHTML = html;
+}
+
+/* 溢出提示 ═══════════ */
+const ROWH = 28;               /* 27px 行高 + 1px 间隙；.list 上下不留 padding，正好是 28 的整数倍 */
+let snapTimer = 0;
+function updateHints(){
+  const sh = scrollEl.scrollHeight, ch = scrollEl.clientHeight, st = scrollEl.scrollTop;
+  const over = sh - ch;
+  const hintT = $("#hintT"), hintB = $("#hintB");
+  if(over < 8){
+    hintT.classList.remove("on"); hintB.classList.remove("on");
+    setScrollable(false);
+    return;
+  }
+  const above = Math.max(0, Math.round((st - listPadTop()) / ROWH));
+  const below = Math.max(0, Math.round((over - st) / ROWH));
+  hintT.innerHTML = above ? `<i>还有 ${above} 条</i>` : "";
+  hintB.innerHTML = below ? `<i>还有 ${below} 条</i>` : "";
+  hintT.classList.toggle("on", above > 0);
+  hintB.classList.toggle("on", below > 0);
+  placeHints();
+
+  setScrollable(true);
+}
+
+/* 提示要落在清单视口的上下边缘之外 —— 那里在贴合态正好是
+   Tab 行和「新增一条」占着但看不见的位置，所以不会压住任何一条待办 */
+function placeHints(){
+  const c = cardEl.getBoundingClientRect(), s = scrollEl.getBoundingClientRect();
+  const t = $("#hintT"), b = $("#hintB");
+  if(t) t.style.top = Math.round(s.top - c.top - 19) + "px";
+  if(b) b.style.top = Math.round(s.bottom - c.top + 3) + "px";
+}
+
+/* 滚动位置只有三种落点：0 / 整行网格 / 最底部（max）。
+   网格从 0 起算 —— 以前从 .list 的 6px 内边距起算，滚到最上面那一步
+   会在「6px」和「0」之间多挪 6px，看起来就是「到顶了又往下回弹一下」。
+   现在列表上下内边距都是 0，28 的整数倍天然对齐，顶部不会再补那一下。 */
+function isCalm(){ return !S.pinned && !document.body.classList.contains("wake"); }
+function rowMax(){
+  return Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+}
+/* .list 上边距把整列行往下推了这么一点，整行网格的起点要从这里起算，
+   否则每吸一次都差这半个像素级的小数（跟着字号变，2~6px 不等）。 */
+function listPadTop(){
+  const v = parseFloat(getComputedStyle(listEl).paddingTop);
+  return isFinite(v) ? v : 0;
+}
+function snapRows(){
+  /* 只有「未唤起」才吸附整行：那时没有滚动条，停在半行会显得莫名其妙。
+     唤醒 / 置顶态给了滚动条，位置就该由滚轮自由决定，再吸一下反而像被拽了一把。 */
+  if(!isCalm()) return;
+  const st = scrollEl.scrollTop, max = rowMax();
+  if(st <= 0.5 || max <= 0){
+    if(st !== 0) scrollEl.scrollTop = 0;
+    return;
+  }
+  if(st >= max - 0.5){
+    if(Math.abs(st - max) > 0.5) scrollEl.scrollTop = max;
+    return;
+  }
+  const p = listPadTop();
+  const t = Math.max(0, Math.min(max, p + Math.round((st - p) / ROWH) * ROWH));
+  if(Math.abs(t - st) > 0.5) scrollEl.scrollTop = t;
+}
+
+/* 一格一格跳整行（贴合态未唤起专用）：不插值、不做平滑，
+   每次正好移动一个列表项，永远不会停在「切掉半条」的位置上。
+   到顶就是 0，到底就是 max —— 到底时最后一条正好贴着下边缘，
+   不会再往上留出一条什么都没有的空行。 */
+function stepRows(n){
+  if(!n) return;
+  const max = rowMax();
+  if(max <= 0) return;
+  const cur = scrollEl.scrollTop;
+  const p = listPadTop();
+  const base = p + Math.round((cur - p) / ROWH) * ROWH;
+  const t = Math.max(0, Math.min(max, base + n * ROWH));
+  if(Math.abs(t - cur) > 0.2) scrollEl.scrollTop = t;
+}
+
+/* 平滑滚动：唤醒态 / 置顶态用。滚轮是钩子按 55ms 一批送过来的，
+   直接一步到位会是「一顿一顿」的跳，这里放到 rAF 里插值追上去。 */
+let glideTarget = null, glideRaf = 0;
+function glideBy(delta){
+  const max = rowMax();
+  if(max <= 0) return;
+  const from = glideTarget == null ? scrollEl.scrollTop : glideTarget;
+  glideTarget = Math.max(0, Math.min(max, from + delta));
+  if(glideRaf) return;
+  const step = ()=>{
+    glideRaf = 0;
+    if(glideTarget == null) return;
+    const cur = scrollEl.scrollTop;
+    const left = glideTarget - cur;
+    if(Math.abs(left) < 0.6){
+      scrollEl.scrollTop = glideTarget;
+      glideTarget = null;
+      return;
+    }
+    /* 0.34 的追赶系数：够快，又不会像直接赋值那样生硬 */
+    scrollEl.scrollTop = cur + left * 0.34;
+    glideRaf = requestAnimationFrame(step);
+  };
+  glideRaf = requestAnimationFrame(step);
+}
+
+let scrollable = null;
+function setScrollable(v){
+  if(scrollable === v) return;
+  scrollable = v;
+  invoke("set_scrollable", { on: v });
+}
+scrollEl.addEventListener("scroll", ()=>{
+  requestAnimationFrame(updateHints);
+  clearTimeout(snapTimer);
+  snapTimer = setTimeout(snapRows, 170);
+}, {passive:true});
+new ResizeObserver(()=>requestAnimationFrame(()=>{ updateHints(); placeHints(); })).observe(scrollEl);
+
+/* ═══════════ Tab 溢出：滚轮直接横向滚 + 两侧提示 ═══════════ */
+function tabsOver(){
+  return Math.ceil(tabsEl.scrollWidth - tabsEl.clientWidth) > 1;
+}
+function updateTabOverflow(){
+  const over = tabsEl.scrollWidth - tabsEl.clientWidth;
+  if(over < 2){
+    tabsWrap.classList.remove("ovfR","ovfL");
+  } else {
+    tabsWrap.classList.toggle("ovfR", tabsEl.scrollLeft < over - 2);
+    tabsWrap.classList.toggle("ovfL", tabsEl.scrollLeft > 2);
+  }
+  syncWheelOk();
+}
+tabsEl.addEventListener("scroll", ()=> requestAnimationFrame(updateTabOverflow), {passive:true});
+/* 指针压在 Tab 条上时，滚轮滚的是 Tab（横向）。
+   以前这里在贴合态一律把滚轮让给清单，于是「Tab 条上怎么滚都不动」；
+   但同时保留一个兜底：Tab 没溢出就还是滚清单，手势不至于白搓。 */
+tabsEl.addEventListener("wheel", e=>{
+  const d = e.deltaY || e.deltaX;
+  if(!d) return;
+  if(tabsOver()){
+    e.preventDefault();
+    tabsEl.scrollLeft += Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+    return;
+  }
+  e.preventDefault();
+  const calm = !S.pinned && !document.body.classList.contains("wake");
+  if(calm) stepRows(d > 0 ? 1 : -1);
+  else glideBy(d);
+  requestAnimationFrame(updateHints);
+}, {passive:false});
+new ResizeObserver(()=>requestAnimationFrame(updateTabOverflow)).observe(tabsEl);
+
+/* 除了清单，还有没有别的地方能滚（Tab 条溢出 / 抽屉展开）。
+   告诉 Rust：这些情况下滚轮也值得截下来，否则窗口没焦点时
+   WebView 根本收不到 wheel，滚什么都白滚。 */
+var wheelOk = null;
+function syncWheelOk(){
+  const tabs = tabsOver();
+  let drawer = false;
+  const ds = foldEl.querySelectorAll(".drawer");
+  for(const d of ds){
+    /* 未唤醒时折叠区整个是 display:none，量出来是 0 —— 那时确实没得滚 */
+    if(d.scrollHeight - d.clientHeight > 1){ drawer = true; break; }
+  }
+  const ok = tabs || drawer;
+  if(ok === wheelOk) return;
+  wheelOk = ok;
+  invoke("set_wheel_ok", { on: ok });
+}
+/* 抽屉一开一关、一变高，WHEEL_OK 就必须跟着变。
+   以前只在 Tab 条尺寸变化 / 唤起时算一次 —— 于是「先唤起、再点开已完成」
+   这条最常见的路径永远漏报，Rust 那边勾着 wheel_ok=false 不截滚轮，
+   抽屉就彻底滚不动了。 */
+new ResizeObserver(()=>requestAnimationFrame(syncWheelOk)).observe(foldEl);
+
+/* ═══════════ 交互（统一 data-act 分发，避免选择器漏项） ═══════════ */
+document.addEventListener("click", e=>{
+  const inMenu = e.target.closest("#ctxmenu");
+  const el = e.target.closest("[data-act]");
+  /* 除菜单自身的点击外，任何一次点击都把右键菜单收起来 */
+  if(!inMenu) closeMenu();
+  if(!el) return;
+  const [act, arg] = el.dataset.act.split(":");
+
+  switch(act){
+    case "check": {
+      const id = arg, c = cat();
+      const row = el.closest(".row");
+      if(row) row.classList.add("leaving");
+      setTimeout(()=>{
+        const it = c.items.find(i=>i.id===id);
+        if(it){ it.done = true; it.at = Date.now(); }
+        render();
+      }, 160);
+      return;
+    }
+    case "edit": { itemEditing = arg; render(); return; }
+    case "uncheck": {
+      const it = cat().items.find(i=>i.id===arg);
+      if(it){ it.done = false; delete it.at; }
+      render(); return;
+    }
+    case "clearDone": {
+      const c = cat(); c.items = c.items.filter(i=>!i.done); render(); return;
+    }
+    case "collapseDone": S.openDone=false; render(); return;
+    case "collapseArch": S.openArch=false; render(); return;
+    case "toggleDone": S.openDone=!S.openDone; if(S.openDone) S.openArch=false; render(); return;
+    case "toggleArch": S.openArch=!S.openArch; if(S.openArch) S.openDone=false; render(); return;
+    case "tab": {
+      if(S.active!==arg){ S.active=arg; S.openDone=false; S.openArch=false; }
+      render(); return;
+    }
+    case "add": startDraft(); return;
+    case "newcat": {
+      const c = {id:uid("c"), name:"新分类", items:[]};
+      S.cats.push(c); S.active=c.id; editing=c.id; S.openDone=false; S.openArch=false;
+      render(); return;
+    }
+    case "toggleArchCat": {
+      S.expanded = S.expanded.includes(arg) ? S.expanded.filter(x=>x!==arg) : [...S.expanded, arg];
+      render(); return;
+    }
+    case "restoreCat": restoreCat(arg); return;
+    case "delCat": confirmDelete(arg); return;
+    case "restoreAll": [...S.archived].forEach(a=>restoreCat(a.id, true)); render(); return;
+    case "openSettings": openSettings(); return;
+    case "closeSettings": closeSettings(); return;
+    case "resetPrefs": {
+      S.prefs = {...DEFAULT_PREFS};
+      applyPrefs(); applyShortcuts(); renderSettings(); render(); save(); return;
+    }
+    /* 每一项都立刻落盘：设置面板没有「确定」按钮，改了就该生效并记住 */
+    case "font": S.prefs.font = arg; applyPrefs(); renderSettings(); save(); return;
+    case "scale": S.prefs.scale = parseFloat(arg); applyPrefs(); renderSettings(); render(); save(); return;
+    case "weight": S.prefs.weight = parseInt(arg,10); applyPrefs(); renderSettings(); render(); save(); return;
+    case "italic": S.prefs.italic = !S.prefs.italic; applyPrefs(); renderSettings(); render(); save(); return;
+    case "ink": S.prefs.ink = arg; applyPrefs(); renderSettings(); save(); return;
+    case "haloColor": S.prefs.haloColor = arg; applyPrefs(); renderSettings(); save(); return;
+    case "tone": S.prefs.tone = arg; applyPrefs(); renderSettings(); save(); return;
+    case "idle": S.prefs.idle = arg; applyPrefs(); renderSettings(); save(); return;
+    case "backing": S.prefs.backing = arg; applyPrefs(); renderSettings(); save(); return;
+    case "halo": S.prefs.halo = !S.prefs.halo; applyPrefs(); renderSettings(); save(); return;
+    case "ring": S.prefs.ring = !S.prefs.ring; applyPrefs(); renderSettings(); save(); return;
+    case "autostart": {
+      S.prefs.autostart = !S.prefs.autostart;
+      invoke("set_autostart", {on:S.prefs.autostart});
+      renderSettings(); save(); return;
+    }
+    case "hkRecord": recordHotkey(arg); return;
+  }
+});
+
+/* 点菜单和面板之外，先把右键菜单收掉（mousedown 更早，不会漏掉） */
+document.addEventListener("mousedown", e=>{
+  if(!e.target.closest("#ctxmenu")) closeMenu();
+}, true);
+
+document.addEventListener("dblclick", e=>{
+  const tab = e.target.closest(".tab");
+  if(tab && tab.dataset.act && tab.dataset.act.startsWith("tab:")){
+    editing = tab.dataset.act.slice(4); render();
+  }
+  if(e.target.closest("#gripB")){
+    S.cardH = null; render();
+  }
+});
+
+/* 右键：不弹 WebView 的默认菜单；在 Tab 上右键才出分类菜单 */
+document.addEventListener("contextmenu", e=>{
+  if(e.target.closest("input")) return;
+  e.preventDefault();
+  const tab = e.target.closest(".tab");
+  if(tab && tab.dataset.act && tab.dataset.act.startsWith("tab:") && !panelOpen){
+    openMenu(tab.dataset.act.slice(4), tab);
+  }
+});
+
+function startDraft(){
+  if(!S.pinned && !ctrl && !hovering) return;
+  /* 关键：先把正在输入的那条落地，否则内容会被新草稿顶掉 */
+  if(draft) commitDraft();
+  draft = {cat:cat() ? cat().id : null, text:""};
+  if(draft.cat){
+    S.openDone = false; S.openArch = false;
+  }
+  render();
+  setTimeout(()=>{ const i=$("#draftInput"); if(i) i.scrollIntoView({block:"nearest"}); }, 30);
+}
+function commitDraft(){
+  if(!draft) return;
+  const text = (draft.text||"").trim();
+  const c = S.cats.find(x=>x.id===draft.cat);
+  if(text && c) c.items.push({id:uid("i"), text, done:false});
+  draft = null;
+  render();
+}
+function commitRename(v){
+  const name = (v||"").trim();
+  const c = S.cats.find(x=>x.id===editing);
+  if(c && name) c.name = name;
+  editing = null;
+  render();
+}
+/* 改一条待办的文字。找的时候不限定当前分类：
+   先把「已完成」抽屉掀开、再切 Tab 之类的动作不应该让这次编辑落空。 */
+function commitItemEdit(v){
+  const text = (v||"").trim();
+  const id = itemEditing;
+  itemEditing = null;
+  if(id && text){
+    const c = S.cats.find(c=>c.items.some(i=>i.id===id))
+           || S.archived.find(c=>c.items.some(i=>i.id===id));
+    const it = c && c.items.find(i=>i.id===id);
+    if(it) it.text = text;
+  }
+  render();
+}
+
+/* 输入期锁定：只要还有输入框有焦点，贴合态就不自动收起。
+   同时告诉 Rust「我在打字」—— 否则穿透一开、窗口失焦，草稿会被当场提交 */
+let typingNotified = false;
+function isLocked(){
+  const active = document.activeElement;
+  const typing = !!(active && active.tagName === "INPUT");
+  return !!draft || !!editing || !!itemEditing || typing;
+}
+/* 退场：底衬要整块一起消失，不能「先塌下面、再淡整块」。
+   摘掉 wake 的那一刻，折叠区 display:none、卡片高度减 81、窗口跟着缩，
+   而底色的过渡还要 150ms —— 中间那几帧就是「一块没有底部的底衬」。
+   所以退场拆两步：
+     ① leaving：wake 先挂着（几何完全不动），只把颜色/模糊/操作层一起退掉；
+     ② 退干净之后再摘 wake，这时底衬已经透明，收高度谁也看不见。
+   什么时候算「退干净」由 transitionend 说了算：计时器会因为首帧没来得及
+   起动画而偏早，宁可听事件。 */
+let leaveTimer = 0;
+function colorAlpha(c){
+  const m = /rgba?\(([^)]+)\)/.exec(c || "");
+  if(!m) return 1;
+  const p = m[1].split(",");
+  return p.length > 3 ? parseFloat(p[3]) : 1;
+}
+function onLeaveFade(e){
+  if(e.target === cardEl && e.propertyName === "background-color") finishLeave();
+}
+function beginLeave(){
+  const body = document.body;
+  /* 底衬本来就不透明（纯白 / 纸白）时没有「消失」这回事，直接收，别拖时间 */
+  if(S.pinned || (body.dataset.idle || "none") !== "none"){
+    body.classList.remove("wake");
+    return;
+  }
+  if(body.classList.contains("leaving")) return;
+  /* 唤醒时的底衬本来就选「通透」—— 没有可淡的东西，直接收 */
+  if(colorAlpha(getComputedStyle(cardEl).backgroundColor) <= 0.01){
+    body.classList.remove("wake");
+    return;
+  }
+  body.classList.add("leaving");
+  cardEl.addEventListener("transitionend", onLeaveFade);
+  clearTimeout(leaveTimer);
+  /* 兜底：万一 transitionend 没来（被别的样式打断），也不能一直挂在那儿 */
+  leaveTimer = setTimeout(finishLeave, 400);
+}
+function finishLeave(){
+  clearTimeout(leaveTimer); leaveTimer = 0;
+  cardEl.removeEventListener("transitionend", onLeaveFade);
+  const body = document.body;
+  if(!body.classList.contains("leaving")) return;
+  body.classList.remove("leaving", "wake");
+  syncCanvas();
+  applyManualHeight();
+  requestAnimationFrame(()=>{ reportHeight(); syncWheelOk(); updateHints(); });
+}
+/* 退场途中又按住 Ctrl：立刻收手，别让它继续退完 */
+function cancelLeave(){
+  if(!document.body.classList.contains("leaving")) return;
+  clearTimeout(leaveTimer); leaveTimer = 0;
+  cardEl.removeEventListener("transitionend", onLeaveFade);
+  document.body.classList.remove("leaving");
+}
+/* 唤醒 = 「按住 Ctrl」且「指针在卡片上」，两个条件同时成立。
+   输入中算例外，否则 Ctrl 一松手，正在编辑的那条就没了 */
+function setWake(){
+  const locked = isLocked();
+  const wake = locked || (ctrl && hovering);
+  if(wake){
+    cancelLeave();
+    document.body.classList.add("wake");
+  }else if(document.body.classList.contains("wake")){
+    beginLeave();
+  }
+  document.body.classList.toggle("locked", locked);
+  syncCanvas();
+  applyManualHeight();
+  /* 卡片的可用高度在唤起前后差 81px，抽屉能不能滚会跟着变 —— 重算一次 */
+  requestAnimationFrame(syncWheelOk);
+  return locked;
+}
+function syncLock(){
+  const locked = setWake();
+  if(locked !== typingNotified){
+    typingNotified = locked;
+    invoke("set_typing", { on: locked });
+  }
+}
+document.addEventListener("focusin", syncLock);
+document.addEventListener("focusout", ()=> setTimeout(syncLock, 0));
+
+/* ═══════════ Tab 菜单 ═══════════ */
+function openMenu(id, anchor){
+  closeMenu();
+  const c = S.cats.find(x=>x.id===id);
+  if(!c) return;
+  const r = anchor.getBoundingClientRect();
+  const m = document.createElement("div");
+  m.className = "menu"; m.id = "ctxmenu";
+  m.innerHTML = `
+    <button data-m="rename"><span class="k">重命名</span><span class="d">双击 Tab 也可以</span></button>
+    <button data-m="archive"><span class="k">归档此分类</span><span class="d">可逆，收进「已归档」随时恢复</span></button>
+    <button data-m="delete"><span class="k danger">删除此分类</span><span class="d">不可逆，需要确认</span></button>`;
+  document.body.appendChild(m);
+  const w = m.offsetWidth, h = m.offsetHeight;
+  const left = Math.max(8, Math.min(r.left - 8, innerWidth - w - 8));
+  let top = r.bottom + 6;
+  if(top + h > innerHeight - 8) top = Math.max(8, r.top - h - 6);
+  m.style.left = left + "px";
+  m.style.top = top + "px";
+  m.addEventListener("click", ev=>{
+    const b = ev.target.closest("[data-m]");
+    if(!b) return;
+    const act = b.dataset.m;
+    closeMenu();
+    if(act==="rename"){ editing = id; render(); }
+    if(act==="archive"){ archiveCat(id); }
+    if(act==="delete"){ confirmDelete(id); }
+  });
+}
+function closeMenu(){ const m=$("#ctxmenu"); if(m) m.remove(); }
+
+function archiveCat(id){
+  const i = S.cats.findIndex(c=>c.id===id);
+  if(i<0) return;
+  const [c] = S.cats.splice(i,1);
+  S.archived.push({id:c.id, name:c.name, items:c.items});
+  if(S.active===id) S.active = (S.cats[i] || S.cats[i-1] || {}).id || null;
+  if(!S.cats.length){
+    const n = {id:uid("c"), name:"未分类", items:[]};
+    S.cats.push(n); S.active = n.id;
+  }
+  S.openDone=false;
+  render();
+}
+function restoreCat(id, quiet){
+  const i = S.archived.findIndex(a=>a.id===id);
+  if(i<0) return;
+  const [a] = S.archived.splice(i,1);
+  S.cats.push({id:a.id, name:a.name, items:a.items});
+  if(!quiet) S.active = a.id;
+  S.expanded = S.expanded.filter(x=>x!==id);
+  if(!quiet) render();
+}
+
+let pendingDelete = null;
+function confirmDelete(id){
+  const inCats = S.cats.find(c=>c.id===id);
+  const inArch = S.archived.find(c=>c.id===id);
+  const c = inCats || inArch;
+  if(!c) return;
+  const where = inCats ? "cats" : "arch";
+  pendingDelete = {id, where};
+  const todo = c.items.filter(i=>!i.done).length;
+  const done = c.items.filter(i=>i.done).length;
+  const tally = `这个${where==="arch"?"归档":""}分类里还有 ${todo} 条未完成、${done} 条已完成。`;
+
+  const mask = document.createElement("div");
+  mask.className="modal-mask"; mask.id="modal";
+  /* 已经在「已归档」里了，「改为归档」这个选项就不该出现 —— 那儿没有可归档的去处 */
+  mask.innerHTML = where === "arch"
+    ? `<div class="modal">
+        <h3>彻底删除「${esc(c.name)}」？</h3>
+        <p>${tally}删除会把它们一起丢掉，不能撤销。</p>
+        <div class="btns">
+          <button class="btn-ghost" data-m="cancel">取消</button>
+          <button class="btn-danger" data-m="delete">删除</button>
+        </div>
+      </div>`
+    : `<div class="modal">
+        <h3>删除「${esc(c.name)}」？</h3>
+        <p>${tally}删除会连它们一起丢掉，不能撤销。<br>如果只是暂时不想看，改成归档效果一样，而且随时能恢复。</p>
+        <div class="btns">
+          <button class="btn-ghost" data-m="cancel">取消</button>
+          <button class="btn-alt" data-m="archive">改为归档</button>
+          <button class="btn-danger" data-m="delete">删除</button>
+        </div>
+      </div>`;
+  document.body.appendChild(mask);
+  mask.addEventListener("click", ev=>{
+    if(ev.target===mask) return closeModal();
+    const b = ev.target.closest("[data-m]");
+    if(!b) return;
+    const m = b.dataset.m;
+    if(m==="cancel") return closeModal();
+    /* 先留一份快照：closeModal() 会把 pendingDelete 清空 */
+    const job = pendingDelete;
+    if(!job) return closeModal();
+
+    if(m==="archive"){
+      closeModal();
+      if(job.where==="cats") archiveCat(job.id);
+      else render();
+      return;
+    }
+    if(m==="delete"){
+      if(job.where==="cats"){
+        const i = S.cats.findIndex(x=>x.id===job.id);
+        if(i >= 0){
+          S.cats.splice(i,1);
+          if(S.active===job.id) S.active = (S.cats[i]||S.cats[i-1]||{}).id||null;
+        }
+        if(!S.cats.length){
+          const n={id:uid("c"),name:"未分类",items:[]}; S.cats.push(n); S.active=n.id;
+        }
+        S.openDone=false;
+      }else{
+        const i = S.archived.findIndex(x=>x.id===job.id);
+        if(i >= 0) S.archived.splice(i,1);
+      }
+      closeModal(); render();
+    }
+  });
+}
+function closeModal(){ const m=$("#modal"); if(m) m.remove(); pendingDelete=null; }
+
+/* ═══════════ 键盘 ═══════════ */
+document.addEventListener("keydown", e=>{
+  if(escHandler && escHandler(e)) return;
+  if(e.key!=="Escape") return;
+  if($("#modal")) return closeModal();
+  if($("#ctxmenu")) return closeMenu();
+  if(panelOpen){ closeSettings(); return; }
+  if(draft){ draft=null; return render(); }
+  if(itemEditing){ itemEditing=null; return render(); }
+  if(editing){ editing=null; return render(); }
+  if(S.openDone||S.openArch){ S.openDone=false; S.openArch=false; return render(); }
+  /* 置顶态按 Esc 贴回桌面 */
+  if(S.pinned){ S.pinned=false; invoke("set_pin",{pinned:false}); render(); }
+});
+
+/* ═══════════ 快捷键录制 ═══════════ */
+let escHandler = null;
+let recording = null;          /* "pin" | "add" */
+function keyLabel(code){
+  if(code.startsWith("Key")) return code.slice(3);
+  if(code.startsWith("Digit")) return code.slice(5);
+  if(/^F\d{1,2}$/.test(code)) return code;
+  return ({Space:"Space", Escape:"Esc", ArrowUp:"↑", ArrowDown:"↓",
+           ArrowLeft:"←", ArrowRight:"→", Backquote:"`"}[code] || code);
+}
+function hotkeyText(h){
+  if(!h || !h.code) return "未设置";
+  return [...(h.mods||[]), keyLabel(h.code)].join(" + ");
+}
+function recordHotkey(which){
+  recording = which;
+  renderSettings();
+  const btn = $("#hk-" + which);
+  if(btn){ btn.classList.add("rec"); btn.textContent = "按下组合键…"; }
+
+  escHandler = (e)=>{
+    if(!recording) return false;
+    e.preventDefault(); e.stopPropagation();
+    if(e.code === "Escape"){
+      recording = null; escHandler = null; renderSettings();
+      return true;
+    }
+    const mods = [];
+    if(e.ctrlKey) mods.push("Ctrl");
+    if(e.altKey) mods.push("Alt");
+    if(e.shiftKey) mods.push("Shift");
+    if(e.metaKey) mods.push("Win");
+    const code = e.code;
+    /* 必须带修饰键，且主键不能是可修饰键本身 */
+    const bad = !mods.length || /^(Control|Alt|Shift|Meta)/.test(code);
+    if(bad){ flashHk("至少要有一个 Ctrl / Alt / Shift"); return true; }
+
+    const which2 = recording;
+    recording = null; escHandler = null;
+    const key = which2 === "pin" ? "hkPin" : "hkAdd";
+    S.prefs[key] = {mods, code};
+    save();
+    applyShortcuts().then(ok=>{
+      renderSettings();
+      if(!ok) flashHk("这个组合被系统或其他程序占用了，换一个");
+    });
+    return true;
+  };
+}
+function flashHk(msg){
+  const btn = $("#hk-" + (recording || "pin"));
+  renderSettings();
+  const host = $("#hkmsg");
+  if(host){
+    host.textContent = msg;
+    host.classList.add("on");
+    clearTimeout(flashHk._t);
+    flashHk._t = setTimeout(()=>{ host.classList.remove("on"); }, 2600);
+  }
+}
+function applyShortcuts(){
+  return invoke("set_shortcuts", {
+    pin: S.prefs.hkPin || DEFAULT_PREFS.hkPin,
+    add: S.prefs.hkAdd || DEFAULT_PREFS.hkAdd
+  }).then(r => r !== false && r !== "err").catch(()=>false);
+}
+
+/* ═══════════ 设置面板 ═══════════ */
+function renderSettings(){
+  const P = S.prefs;
+  const seg = (arr, cur, act) => `<div class="seg">${
+    arr.map(o=>`<button data-act="${act}:${o.v}" data-on="${String(o.v)===String(cur)?'1':'0'}">${o.t}</button>`).join("")
+  }</div>`;
+
+  $("#pbody").innerHTML = `
+    <div class="sec">
+      <h4>待办文字</h4>
+      <div class="field">
+        <div class="fl"><b>字体</b><i>只影响事项文字，界面本身不变</i></div>
+        <select class="sel" id="fontSel">
+          ${Object.entries(FONTS).map(([k,v])=>`<option value="${k}" ${P.font===k?'selected':''}>${v.label}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field">
+        <div class="fl"><b>字号</b><i>只缩放待办文字</i></div>
+        ${seg([{v:"0.92",t:"小"},{v:"1",t:"标准"},{v:"1.12",t:"大"},{v:"1.24",t:"特大"}], P.scale, "scale")}
+      </div>
+      <div class="field">
+        <div class="fl"><b>字重</b></div>
+        ${seg([{v:"400",t:"常规"},{v:"500",t:"中黑"},{v:"600",t:"加粗"}], P.weight, "weight")}
+      </div>
+      <div class="field">
+        <div class="fl"><b>斜体</b></div>
+        <button class="sw" data-act="italic" data-on="${P.italic?'1':'0'}"></button>
+      </div>
+      <div class="field">
+        <div class="fl"><b>文字颜色</b><i>仅「未唤起 + 通透」时生效，其余保持墨色</i></div>
+        <div class="swatches">
+          ${INKS.map(c=>`<button class="sw-dot" data-act="ink:${c}" data-on="${(P.ink||'').toLowerCase()===c.toLowerCase()?'1':'0'}" style="background:${c}"></button>`).join("")}
+          <label class="sw-pick" title="自定义"><input type="color" id="inkPick" value="${P.ink}"></label>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h4>贴合态</h4>
+      <div class="field">
+        <div class="fl"><b>未唤起底衬</b><i>贴在桌面上、没碰它时的样子</i></div>
+        ${seg([{v:"white",t:"纯白"},{v:"paper",t:"纸白"},{v:"none",t:"通透"}], P.idle, "idle")}
+      </div>
+      <div class="field">
+        <div class="fl"><b>唤醒时底衬</b><i>按住 Ctrl 且指针在卡片上时浮起的一层</i></div>
+        ${seg([{v:"white",t:"纯白"},{v:"paper",t:"纸白"},{v:"veil",t:"半透"}], P.backing, "backing")}
+      </div>
+      <div class="field">
+        <div class="fl"><b>文字光晕</b><i>仅「未唤起 + 通透」时生效</i></div>
+        <button class="sw" data-act="halo" data-on="${P.halo?'1':'0'}"></button>
+      </div>
+      <div class="field">
+        <div class="fl"><b>光晕颜色</b></div>
+        <div class="swatches">
+          ${HALOS.map(c=>`<button class="sw-dot" data-act="haloColor:${c}" data-on="${(P.haloColor||'').toLowerCase()===c.toLowerCase()?'1':'0'}" style="background:${c}"></button>`).join("")}
+          <label class="sw-pick" title="自定义"><input type="color" id="haloPick" value="${P.haloColor||'#FFFFFF'}"></label>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h4>外观</h4>
+      <div class="field">
+        <div class="fl"><b>卡片底色</b><i>置顶态用</i></div>
+        ${seg([{v:"white",t:"纯白"},{v:"paper",t:"纸白"},{v:"veil",t:"半透"}], P.tone, "tone")}
+      </div>
+      <div class="field">
+        <div class="fl"><b>聚焦外发光</b><i>置顶态点中卡片时亮一圈</i></div>
+        <button class="sw" data-act="ring" data-on="${P.ring?'1':'0'}"></button>
+      </div>
+      <div class="field">
+        <div class="fl"><b>高度上限</b><i>超出后清单内部滚动</i></div>
+        <input class="rng" type="range" id="maxhRng" min="300" max="900" step="20" value="${P.maxH}">
+        <span class="rngv" id="maxhVal">${P.maxH}px</span>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h4>快捷键</h4>
+      <div class="field">
+        <div class="fl"><b>置顶 / 贴回桌面</b><i>点一下再按新的组合</i></div>
+        <button class="hkey" id="hk-pin" data-act="hkRecord:pin">${hotkeyText(P.hkPin)}</button>
+      </div>
+      <div class="field">
+        <div class="fl"><b>直接新建一条</b></div>
+        <button class="hkey" id="hk-add" data-act="hkRecord:add">${hotkeyText(P.hkAdd)}</button>
+      </div>
+      <div class="hkerr" id="hkmsg"></div>
+    </div>
+
+    <div class="sec">
+      <h4>行为</h4>
+      <div class="field">
+        <div class="fl"><b>开机自动启动</b><i>登录后静默贴到桌面</i></div>
+        <button class="sw" data-act="autostart" data-on="${P.autostart?'1':'0'}"></button>
+      </div>
+      <div class="field">
+        <div class="fl"><b>贴回桌面</b><i>置顶态下按一下就行</i></div>
+        <span class="kbd">Esc</span>
+      </div>
+    </div>`;
+
+  const fs = $("#fontSel");
+  if(fs) fs.onchange = e => { S.prefs.font = e.target.value; applyPrefs(); save(); };
+  const ip = $("#inkPick");
+  if(ip) ip.oninput = e => { S.prefs.ink = e.target.value; applyPrefs(); save(); };
+  const hp = $("#haloPick");
+  if(hp) hp.oninput = e => { S.prefs.haloColor = e.target.value; applyPrefs(); save(); };
+  const rng = $("#maxhRng");
+  if(rng){
+    rng.oninput = e => {
+      S.prefs.maxH = parseInt(e.target.value, 10);
+      $("#maxhVal").textContent = S.prefs.maxH + "px";
+      applyPrefs(); save(); requestAnimationFrame(reportHeight);
+    };
+  }
+}
+
+let prevPinned = null;
+function openSettings(){
+  if(panelOpen) return;
+  panelOpen = true;
+
+  /* 设置一打开，列表就切到置顶态：
+     白卡、可交互，Ctrl 松手也不会缩回去 —— 否则一边改设置一边看着字飘，很难受 */
+  prevPinned = S.pinned;
+  if(!S.pinned){
+    S.pinned = true;
+    document.body.classList.add("pinned");
+    invoke("set_pin", { pinned: true });
+    syncCanvas();
+  }
+
+  /* 卡片宽度先量下来钉死：窗口要往旁边长，卡片自己不能被拉伸 */
+  const cr = cardEl.getBoundingClientRect();
+  const cw = Math.round(cr.width), ch = Math.round(cr.height);
+  document.body.style.setProperty("--cw", cw + "px");
+
+  /* 面板放哪边、多宽 —— 由系统侧按真实显示器可用区域算好再传回来。
+     窗口只朝那一侧长，卡片在屏幕上的坐标一个像素都不动。 */
+  Promise.resolve(invoke("settings_side")).then(r => {
+    if(!panelOpen) return;
+    const side = (r && r.side) || "right";
+    const pw = Math.round((r && r.pw) || 340);
+    document.body.style.setProperty("--pw", pw + "px");
+    document.body.classList.toggle("panel-left", side === "left");
+    document.body.classList.add("settings");
+    renderSettings();
+    invoke("enter_settings", { side, pw });
+
+    /* 面板高度按内容定；窗口高度取「卡片 / 面板」里更高的那个，只往下长，不挪位置 */
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      const hd = $(".phead"), bd = $("#pbody"), ft = $(".pfoot");
+      if(!hd || !bd || !ft) return;
+      const ph = Math.ceil(hd.offsetHeight + bd.scrollHeight + ft.offsetHeight);
+      invoke("fit_settings", { h: Math.max(ph, ch) + 40 });
+    }));
+  });
+}
+function closeSettings(){
+  if(!panelOpen) return;
+  panelOpen = false;
+  /* 先把卡片宽度用内联样式钉死：窗口要缩回去，若这时让 .card 回到 width:100%，
+     它会在那一帧被拉成整个窗口宽度，ResizeObserver 立刻把这个错误宽度上报出去，
+     窗口就再也收不回来了（实测会停在 600px） */
+  const cw = Math.round(cardEl.getBoundingClientRect().width);
+  cardEl.style.width = cw + "px";
+
+  document.body.classList.remove("settings", "panel-left");
+  document.body.style.removeProperty("--pw");
+  const back = prevPinned;
+  prevPinned = null;
+  /* 先还原窗口几何，再决定贴不贴回桌面 —— 顺序反了会因为 always_on_top 被重新拉起来 */
+  invoke("exit_settings").then(()=>{
+    if(back === false && S.pinned){
+      S.pinned = false;
+      document.body.classList.remove("pinned");
+      invoke("set_pin", { pinned: false });
+    }
+    setTimeout(()=>{
+      cardEl.style.width = "";
+      document.body.style.removeProperty("--cw");
+      applyManualHeight();
+      reportHeight(); updateHints(); syncCanvas();
+    }, 60);
+  });
+}
+
+/* ═══════════ 与 Rust 同步 ═══════════ */
+function setCtrlUI(v){
+  ctrl = v;
+  document.body.classList.toggle("ctrl", v);
+  syncLock();
+}
+listen("ctrl", v => setCtrlUI(v));
+listen("hover", v => {
+  hovering = !!v;
+  if(panelOpen) return;
+  setWake();
+});
+listen("pin", v => {
+  S.pinned = v;
+  document.body.classList.toggle("pinned", v);
+  /* 切状态时先掐掉一切过渡，避免闪出一块底色 */
+  document.body.classList.add("switching");
+  setTimeout(()=>document.body.classList.remove("switching"), 180);
+  if(!v) setCtrlUI(false);
+  syncCanvas();
+  applyManualHeight();
+  save();
+  requestAnimationFrame(reportHeight);
+});
+listen("focus", v => document.body.classList.toggle("focus", !!v));
+/* 贴合态没有键盘焦点，滚轮由 Rust 的鼠标钩子截下来再送过来，
+   并且带着「这一下滚在哪个点」（客户区 CSS 像素，和 elementFromPoint 同一套坐标）。
+   落点决定滚谁：Tab 条上 → 横向滚 Tab；抽屉里 → 滚抽屉；其余 → 滚清单。 */
+function scrollBoxAt(x, y){
+  let el = null;
+  try{ el = document.elementFromPoint(x, y); }catch(e){ return null; }
+  if(!el) return null;
+  if(tabsOver() && el.closest(".tabs-wrap")) return tabsEl;
+  const dw = el.closest(".drawer");
+  if(dw && dw.scrollHeight - dw.clientHeight > 1) return dw;
+  return null;
+}
+/* 滚轮分发的全部逻辑都收在这一个函数里：
+   钩子送来的是「滚了多少 + 滚在哪个点」，这里决定滚谁。 */
+let hookWheelAt = 0;
+function handleWheel(p){
+  if(panelOpen) return;
+  const delta = typeof p === "number" ? p : (p && p.d) || 0;
+  if(!delta) return;
+  hookWheelAt = performance.now();
+  const box = (p && typeof p.x === "number") ? scrollBoxAt(p.x, p.y) : null;
+  /* 钩子的 delta：正数 = 向上滚。滚 Tab / 抽屉时「向上」对应 scrollLeft/scrollTop 变小 */
+  if(box === tabsEl){
+    tabsEl.scrollLeft -= delta * 0.9;
+    requestAnimationFrame(updateTabOverflow);
+    return;
+  }
+  if(box){
+    box.scrollTop -= delta * 0.9;
+    return;
+  }
+  /* 未唤起：一格一格跳整行 —— 没有滚动条，整行跳才不会停在「切掉半条」的位置；
+     唤醒 / 置顶：和置顶态一样顺滑地滚，一格滚多少由滚轮本身决定 */
+  const calm = !S.pinned && !document.body.classList.contains("wake");
+  if(calm) stepRows(delta > 0 ? -1 : 1);
+  else glideBy(-delta * 0.85);
+  requestAnimationFrame(updateHints);
+}
+listen("wheel", handleWheel);
+
+/* 第二条路：窗口真的收到原生滚轮时（按住 Ctrl 之后不再穿透，或者点过卡片有了焦点），
+   浏览器自己挑的滚动容器不一定是我们想要的那个 —— 指针明明压在已完成抽屉上，
+   它可能把滚轮算给了清单。这里用同一套落点判定再兜一次；钩子刚处理过的不重复。 */
+document.addEventListener("wheel", e => {
+  if(panelOpen) return;
+  if(performance.now() - hookWheelAt < 150) return;
+  const d = e.deltaY || e.deltaX;
+  if(!d) return;
+  const box = scrollBoxAt(e.clientX, e.clientY);
+  if(box === tabsEl){
+    e.preventDefault();
+    tabsEl.scrollLeft += d;
+    requestAnimationFrame(updateTabOverflow);
+    return;
+  }
+  if(box){
+    e.preventDefault();
+    box.scrollTop += d;
+    return;
+  }
+  /* 清单：未唤起按整行跳（浏览器的默认滚法会停在半行），唤醒态交给浏览器自己滚 */
+  if(!S.pinned && !document.body.classList.contains("wake")){
+    e.preventDefault();
+    stepRows(d > 0 ? 1 : -1);
+    requestAnimationFrame(updateHints);
+  }
+}, {passive:false});
+listen("new-item", ()=> startDraft());
+listen("open-settings", ()=> openSettings());
+listen("card-width", w => { S.cardW = w; save(); });
+
+/* ═══════════ 尺寸 ═══════════ */
+const PADPX = 40;              /* body 上下/左右各 20 */
+const MIN_W = 320, MAX_W = 560;
+const MIN_H = 140;
+
+let lastW = 0, lastH = 0;
+function reportHeight(){
+  if(panelOpen || resizing || recoveryPending) return;
+  const r = cardEl.getBoundingClientRect();
+  const w = Math.round(r.width) + PADPX;
+  const h = Math.round(r.height) + PADPX;
+  if(Math.abs(w-lastW) < 1 && Math.abs(h-lastH) < 1) return;
+  lastW = w; lastH = h;
+  invoke("set_size", { w, h });
+}
+new ResizeObserver(()=>requestAnimationFrame(reportHeight)).observe(cardEl);
+
+function applyManualHeight(){
+  /* cardH 记的是「有完整面板」时的高度。未唤起时底部操作层收走了，
+     卡片高度也要跟着减掉同样的 81px —— 否则拖过高度的人会看到
+     未唤起反而比唤起时多露三行，一按 Ctrl 内容又被挤回去。 */
+  const h = S.cardH ? Math.max(150, S.cardH - (isCalm() ? 81 : 0)) : "";
+  cardEl.style.height = h ? h + "px" : "";
+}
+const _render = render;
+render = function(){
+  applyManualHeight();
+  _render();
+  /* 折叠区是每次渲染重建的，抽屉能不能滚只有渲染完才知道 ——
+     顺手重报一次，让 Rust 决定要不要截滚轮 */
+  syncWheelOk();
+  requestAnimationFrame(syncWheelOk);
+};
+
+/* ═══════════ 拖动：卡片空白处 / 设置标题栏 ═══════════ */
+document.addEventListener("mousedown", e=>{
+  if(e.button !== 0) return;
+  if(S.pinned && !panelOpen) document.body.classList.add("focus");
+
+  /* 设置面板：标题栏可拖 */
+  if(panelOpen){
+    if(e.target.closest("button,input,select")) return;
+    if(!e.target.closest(".phead")) return;
+    try{ if(HAS_T && window.__TAURI__.window) window.__TAURI__.window.getCurrentWindow().startDragging(); }catch(err){}
+    return;
+  }
+
+  if(e.target.closest("button,input,select,textarea,.grip,.row,.blank,.drawer,[data-nodrag]")) return;
+  if(!S.pinned && !ctrl && !hovering) return;
+  try{
+    if(HAS_T && window.__TAURI__.window){
+      window.__TAURI__.window.getCurrentWindow().startDragging();
+    }
+  }catch(err){}
+});
+
+/* ═══════════ 拖拽改尺寸 ═══════════ */
+let rs = null;
+function beginResize(kind, e){
+  if(!S.pinned || panelOpen) return;
+  const r = cardEl.getBoundingClientRect();
+  rs = {kind, sx:e.screenX, sy:e.screenY, w:r.width, h:r.height};
+  resizing = true;
+  document.body.style.cursor = kind==="w" ? "ew-resize" : kind==="h" ? "ns-resize" : "nwse-resize";
+  e.preventDefault();
+  e.stopPropagation();
+}
+$("#gripR").addEventListener("mousedown", e=>beginResize("w", e));
+$("#gripB").addEventListener("mousedown", e=>beginResize("h", e));
+$("#gripC").addEventListener("mousedown", e=>beginResize("wh", e));
+
+window.addEventListener("mousemove", e=>{
+  if(!rs) return;
+  const dx = e.screenX - rs.sx, dy = e.screenY - rs.sy;
+  let w = rs.w, h = rs.h;
+  if(rs.kind !== "h"){
+    w = Math.max(MIN_W, Math.min(MAX_W, Math.round((rs.w + dx) / 8) * 8));
+    S.cardW = w;
+  }
+  if(rs.kind !== "w"){
+    h = Math.max(MIN_H, Math.min(S.prefs.maxH, Math.round(rs.h + dy)));
+    S.cardH = h;
+  }
+  cardEl.style.width = (rs.kind === "h" ? rs.w : w) + "px";
+  cardEl.style.height = (rs.kind === "w" ? rs.h : h) + "px";
+  invoke("set_size", {
+    w: (rs.kind === "h" ? rs.w : w) + PADPX,
+    h: (rs.kind === "w" ? rs.h : h) + PADPX
+  });
+  lastW = (rs.kind === "h" ? rs.w : w) + PADPX;
+  lastH = (rs.kind === "w" ? rs.h : h) + PADPX;
+});
+window.addEventListener("mouseup", ()=>{
+  if(!rs) return;
+  rs = null;
+  resizing = false;
+  document.body.style.cursor = "";
+  cardEl.style.width = "";
+  applyManualHeight();
+  save();
+  requestAnimationFrame(()=>{ reportHeight(); updateHints(); });
+});
+
+/* ═══════════ 起 ═══════════ */
+applyPrefs();
+render();
+applyShortcuts();
+
+/* localStorage 万一读不出来（WebView2 偶发不落盘），用文件镜像顶上 */
+recoverFromFile();
+if(location.hash.indexOf("settings") >= 0) setTimeout(openSettings, 50);
+if(location.hash.indexOf("glue") >= 0){ S.pinned = false; if(location.hash.indexOf("act") >= 0){ document.body.classList.add("ctrl","wake"); } render(); }
+if(location.hash.indexOf("w380") >= 0){ document.body.classList.add("probe"); }
+if(S.cardW && S.cardW !== 380){
+  setTimeout(()=>invoke("set_size", { w: S.cardW + PADPX }), 30);
+}
+setTimeout(()=>{ reportHeight(); updateHints(); updateTabOverflow(); }, 80);
+
+/* 页脚版本号从 Rust 的 CARGO_PKG_VERSION 取，前端不再手写 ——
+   以前每发一版都要记得改这里，1.5.4 / 1.5.5 都漏过。 */
+invoke("app_version").then(v=>{
+  const el = document.getElementById("verNum");
+  if(el && typeof v === "string" && v.trim()) el.textContent = v.trim();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "desklist",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DeskList — 贴在桌面上的待办清单",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:win": "tauri build --bundles nsis",
+    "build:mac": "tauri build --bundles dmg"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}
