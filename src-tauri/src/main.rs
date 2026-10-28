@@ -411,59 +411,172 @@ fn tray_menu(app: &tauri::AppHandle, zh: bool) -> tauri::Result<Menu<tauri::Wry>
 }
 
 /* ── 真·置顶 ─────────────────────────────────────────────────
-   Tauri 的 set_always_on_top 靠不住：置顶/贴回桌面这一下，窗口的 exstyle
-   会从 0xC0130（layered + 穿透）整份改写成 0x40110，WS_EX_TOPMOST（0x8）
-   在这一步丢掉；而且改写是异步落到消息循环里的，谁先谁后没准。
+   WS_EX_TOPMOST 这一位**只能读、不能写**，整件事就卡在这里：
 
-   实测现象（这也是最容易误判的地方）：
-     · 切到置顶态的那一瞬间，SetWindowPos(HWND_TOPMOST) 返回成功，
-       紧接着读回来却还是 0x40110 —— 样式正在重建，这一位挂不上；
-     · 同一个窗口等它稳定下来再设，就稳了；
-     · 但鼠标一移上来，apply_mouse 又会跑一遍 set_ignore_cursor_events，
-       照样把 0x8 冲掉。
+     · 用 SetWindowLong(GWL_EXSTYLE) 往里写 0x8 是官方不支持的操作，系统直接吞掉。
+       实测：写 0x40118，读回来还是 0x40110 —— 写了个寂寞。
+     · tao 的每一次 set_window_flags（set_always_on_top / set_ignore_cursor_events /
+       set_size 引起的可见性调整……）都会拿自己缓存的 flags **整份重写** exstyle，
+       顺带刷一下边框：
+           SetWindowLongW(hwnd, GWL_EXSTYLE, style_ex);
+           SetWindowPos(hwnd, None, …, SWP_NOZORDER | SWP_FRAMECHANGED);
+       这一下就把窗口从置顶带里踢了出来 —— 因为真正让它进带的那一位写不进去。
+     · 更麻烦的是 set_always_on_top 里的 SetWindowPos 带 SWP_ASYNCWINDOWPOS，
+       是**投递**给主线程的，落地时间比我们晚，谁先谁后全看运气。
 
-   所以这里不做「一次性设置」的假设：
-     1) 设之前先看，已经是目标状态就不动（省掉无谓的 Z 序重排）；
-     2) 设完立刻验，不对就退到直接写 exstyle；
-     3) 轮询线程每轮顺手看一眼，置顶态下发现 0x8 没了就补回来。
-   一次 GetWindowLongW 是纳秒级，不担心开销。 */
+   上一版的错在于把「exstyle 里有没有 0x8」当成「在不在置顶带」。那一位被系统
+   吞成 0 之后，代码每轮都想修，修法里又用 SetWindowLong 兜底 —— 空动作。
+   三个回合全白费，日志里留下「三次都没挂上，ex=0x40110」。
+   表现就是：前面开着别的程序时按 Ctrl+Alt+D，卡片永远上不来。
+
+   现在只认 Z 序：卡片头上压着「可见的普通窗口」才算被挡住。
+   别的置顶窗口（开始菜单、任务栏、输入法候选框）压在头上不算，不跟它们抢。
+   进置顶带也只有一个正确姿势：SetWindowPos(HWND_TOPMOST)。 */
 #[cfg(windows)]
-fn force_top_raw(hwnd: isize, on: bool) {
+const ABOVE_CLEAR: u8 = 0;
+#[cfg(windows)]
+const ABOVE_NORMAL: u8 = 1;
+#[cfg(windows)]
+const ABOVE_TOPMOST: u8 = 2;
+
+#[cfg(windows)]
+fn exstyle_of(h: isize) -> u32 {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, WINDOW_LONG_PTR_INDEX};
+    unsafe { GetWindowLongW(HWND(h as *mut core::ffi::c_void), WINDOW_LONG_PTR_INDEX(-20)) as u32 }
+}
+
+#[cfg(windows)]
+fn overlaps(a: (i32, i32, i32, i32), b: (i32, i32, i32, i32)) -> bool {
+    a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3
+}
+
+/* 卡片头上那个窗口是谁家的 —— 一次 GetWindow + GetClassName，几百纳秒。
+   正常情况走两三个就返回；EnumWindows 是百微秒级，能不用就不用。 */
+#[cfg(windows)]
+fn above_me(me: isize) -> u8 {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongW, SetWindowLongPtrW, SetWindowPos, HWND_NOTOPMOST, HWND_TOPMOST,
-        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WINDOW_LONG_PTR_INDEX,
+        GetClassNameW, GetWindow, IsWindowVisible, GW_HWNDPREV,
+    };
+    let Some(mine) = win_rect(me) else {
+        return ABOVE_CLEAR;
     };
     unsafe {
-        let h = HWND(hwnd as *mut _);
-        let read = || GetWindowLongW(h, WINDOW_LONG_PTR_INDEX(-20)) as u32;
-        if ((read() & 0x8) != 0) == on {
-            return;
+        let mut cur = HWND(me as *mut core::ffi::c_void);
+        for _ in 0..12 {
+            let Ok(prev) = GetWindow(cur, GW_HWNDPREV) else {
+                return ABOVE_CLEAR; /* 顶上没人了 */
+            };
+            if prev.0.is_null() {
+                return ABOVE_CLEAR;
+            }
+            cur = prev;
+            if !IsWindowVisible(prev).as_bool() {
+                continue; /* 看不见的东西挡不住任何东西 */
+            }
+            let mut buf = [0u16; 64];
+            let n = GetClassNameW(prev, &mut buf);
+            let cls = String::from_utf16_lossy(&buf[..n.max(0) as usize]);
+            /* 桌面、任务栏、输入法、手写浮层 —— 它们既不收滚轮也不该被我们压过去 */
+            if matches!(
+                cls.as_str(),
+                "Progman"
+                    | "WorkerW"
+                    | "Shell_TrayWnd"
+                    | "Shell_SecondaryTrayWnd"
+                    | "ShellHandwritingCanvas"
+                    | "Windows.UI.Core.CoreWindow"
+                    | "ForegroundStaging"
+                    | "MSCTFIME UI"
+                    | "IME"
+                    | "CicLoaderWndClass"
+                    | "tooltips_class32"
+                    | "ThumbnailDeviceHelperWnd"
+                    | "XamlExplorerHostIslandWindow"
+            ) {
+                continue;
+            }
+            let Some(r) = win_rect(prev.0 as isize) else {
+                continue;
+            };
+            if !overlaps(mine, r) {
+                continue; /* 在别的屏幕上，或者压根没压到卡片 */
+            }
+            return if exstyle_of(prev.0 as isize) & 0x8 != 0 {
+                ABOVE_TOPMOST /* 别的置顶窗口（开始菜单、系统对话框）—— 不抢 */
+            } else {
+                ABOVE_NORMAL
+            };
         }
-        for _ in 0..3 {
+    }
+    ABOVE_CLEAR
+}
+
+/* 进置顶带唯一的正确姿势。 */
+#[cfg(windows)]
+fn raise_top(me: isize) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+    };
+    if me == 0 {
+        return false;
+    }
+    unsafe {
+        SetWindowPos(
+            HWND(me as *mut core::ffi::c_void),
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        )
+        .is_ok()
+    }
+}
+
+#[cfg(windows)]
+fn force_top_raw(hwnd: isize, on: bool) {
+    if hwnd == 0 {
+        return;
+    }
+    if !on {
+        /* 摘掉置顶：直接交给系统，不查位 —— 那个位本来就会骗人 */
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, HWND_NOTOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        };
+        unsafe {
             let _ = SetWindowPos(
-                h,
-                if on { HWND_TOPMOST } else { HWND_NOTOPMOST },
+                HWND(hwnd as *mut core::ffi::c_void),
+                HWND_NOTOPMOST,
                 0,
                 0,
                 0,
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
-            let now = read();
-            if ((now & 0x8) != 0) == on {
-                return;
-            }
-            /* 退路：直接写那一位。样式重建期间 SetWindowPos 会被吞掉。 */
-            let want = if on { now | 0x8 } else { now & !0x8 };
-            SetWindowLongPtrW(h, WINDOW_LONG_PTR_INDEX(-20), want as isize);
-            if ((read() & 0x8) != 0) == on {
-                return;
-            }
-            thread::sleep(Duration::from_millis(2));
         }
-        logln(&format!("force_top({}) 三次都没挂上，ex=0x{:X}", on, read()));
+        return;
     }
+    /* 没被普通窗口盖住就什么都不做：
+       卡片本来就在最上层时反复 SetWindowPos，只会去跟开始菜单抢位置。 */
+    if above_me(hwnd) != ABOVE_NORMAL {
+        return;
+    }
+    for _ in 0..4 {
+        raise_top(hwnd);
+        if above_me(hwnd) != ABOVE_NORMAL {
+            return;
+        }
+        thread::sleep(Duration::from_millis(8));
+    }
+    logln(&format!(
+        "置顶没生效：头上还压着普通窗口，ex=0x{:X}",
+        exstyle_of(hwnd)
+    ));
 }
 
 #[cfg(not(windows))]
@@ -822,20 +935,22 @@ fn do_pin(win: &WebviewWindow, pinned: bool) {
     force_top(win, pinned);
     apply_mouse(win);
     if pinned {
-        /* 置顶也要补刀，而且必须等一会儿：
-           切进置顶态的那一百多毫秒里，Tauri 正在把窗口从 layered 样式重新
-           建成普通窗口（exstyle 从 0xC0130 变成 0x40110），这段时间里
-           SetWindowPos(HWND_TOPMOST) 返回成功但 0x8 位根本挂不上 ——
-           实测连补 5 次、每次隔 2ms，读回来还是 0x40110。
-           等样式重建结束再补，一次就成。 */
+        /* 进置顶态要补好几刀：
+           tao 的 set_always_on_top / set_ignore_cursor_events 都是往主线程投递的，
+           落地时间在我们之后；它们每落一次，就用缓存里的 flags 把 exstyle 整份重写，
+           顺手把窗口从置顶带里踢出来一次（原因见 force_top 上面的注释）。
+           所以这里在 30/90/180/300ms 上**无条件**重挂一遍 ——
+           不查状态，一次 SetWindowPos 只有几微秒，宁可多挂。 */
         let w2 = win.clone();
         thread::spawn(move || {
-            for step in [120u64, 220] {
+            for step in [30u64, 60, 90, 120] {
                 thread::sleep(Duration::from_millis(step));
                 if !PINNED.load(Ordering::Relaxed) || SETTINGS.load(Ordering::Relaxed) {
                     return;
                 }
-                force_top(&w2, true);
+                if let Ok(h) = w2.hwnd() {
+                    raise_top(h.0 as isize);
+                }
             }
         });
     }
@@ -1002,6 +1117,8 @@ fn enter_settings(window: WebviewWindow, side: Option<String>, pw: Option<f64>) 
 
     SETTINGS.store(true, Ordering::Relaxed);
     let _ = window.set_always_on_top(true);
+    /* 同上：样式位不等于真的在置顶带上 */
+    force_top(&window, true);
     let _ = window.set_ignore_cursor_events(false);
 
     let pw = pw.unwrap_or(340.0).clamp(160.0, 420.0);
@@ -1088,6 +1205,7 @@ fn exit_settings(window: WebviewWindow) {
     }
     let _ = window.set_always_on_top(PINNED.load(Ordering::Relaxed));
     if !PINNED.load(Ordering::Relaxed) {
+        force_top(&window, false);
         send_to_bottom(&window);
     }
     apply_mouse(&window);
@@ -1315,12 +1433,11 @@ fn bind_add(app: &tauri::AppHandle, sc: Shortcut) -> Result<(), String> {
             if ev.state() == ShortcutState::Pressed {
                 if let Some(w) = h.get_webview_window("main") {
                     if !PINNED.load(Ordering::Relaxed) {
-                        let _ = w.set_always_on_top(true);
-                        PINNED.store(true, Ordering::Relaxed);
+                        /* 走 do_pin：置顶该补的那几刀一次都不能少，
+                           否则从别的程序里按 Ctrl+Alt+N，窗口照样上不来 */
+                        do_pin(&w, true);
                         /* 只为了打字临时顶上来，输入结束要自己退回去 */
                         TEMP_PIN.store(true, Ordering::Relaxed);
-                        apply_mouse(&w);
-                        let _ = w.emit("pin", true);
                     }
                     /* 热键是从别的应用按下来的，窗口这时没有键盘焦点 ——
                        不给焦点的话，用户接着打的字全落到原来那个程序里 */
@@ -1427,6 +1544,11 @@ fn check_nudge(app: &tauri::AppHandle) {
         return;
     }
     let _ = w.set_always_on_top(true);
+    /* set_always_on_top 只写样式位，真正进置顶带得靠这一下（见 force_top 注释） */
+    force_top(&w, true);
+    if let Ok(h) = w.hwnd() {
+        raise_top(h.0 as isize);
+    }
     NUDGE.store(true, Ordering::Relaxed);
     let w2 = w.clone();
     thread::spawn(move || {
@@ -1434,6 +1556,7 @@ fn check_nudge(app: &tauri::AppHandle) {
         NUDGE.store(false, Ordering::Relaxed);
         if !PINNED.load(Ordering::Relaxed) && !SETTINGS.load(Ordering::Relaxed) {
             let _ = w2.set_always_on_top(false);
+            force_top(&w2, false);
             send_to_bottom(&w2);
         }
     });
@@ -1618,11 +1741,11 @@ fn main() {
 
                 /* 窗口句柄缓存住，整个循环只取一次，不再每轮去 HashMap 里翻 */
                 let me = MY_HWND.load(Ordering::Relaxed);
-                /* 置顶态兜底：鼠标挪动、托盘菜单、切前台都会让 apply_mouse 再跑一遍
-                   set_ignore_cursor_events，而那一下会把 WS_EX_TOPMOST 整位冲掉。
-                   每轮顺手看一眼（已经是置顶就直接返回，只有 GetWindowLongW），
-                   掉了立刻补回来 —— 用户不会看到「置顶一会儿又被盖住」。 */
-                if pinned && me != 0 {
+                /* 置顶态兜底：鼠标挪动、托盘菜单、切前台、打字都会让 apply_mouse 再跑
+                   一遍 set_ignore_cursor_events，tao 随即用缓存的 flags 整份重写 exstyle，
+                   把窗口从置顶带里踢出去。这里每轮看一眼「头上还有没有普通窗口」，
+                   有就重挂一次 —— 判据是 Z 序，不是那个会骗人的 0x8 位。 */
+                if (pinned || settings) && me != 0 {
                     force_top_raw(me, true);
                 }
                 let rect = if me != 0 { win_rect(me) } else { None };
@@ -1702,7 +1825,10 @@ fn main() {
                 }
 
                 if pinned || settings {
-                    thread::sleep(Duration::from_millis(180));
+                    /* 置顶态每 90ms 复查一次「有没有被普通窗口盖住」：
+                       tao 重写完样式之后我们可能正好落在置顶带外面，
+                       90ms 内一定补回来，肉眼看不到闪。设置面板不用盯这么紧。 */
+                    thread::sleep(Duration::from_millis(if pinned { 90 } else { 180 }));
                     continue;
                 }
 

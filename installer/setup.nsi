@@ -6,7 +6,7 @@
 
 !define APP      "DeskList"
 !define APPNAME  "Desk List"
-!define VER      "1.5.12"
+!define VER      "1.5.13"
 !define EXE      "DeskList.exe"
 !define REGUN    "Software\Microsoft\Windows\CurrentVersion\Uninstall\DeskList"
 !define REGAPP   "Software\DeskList"
@@ -19,7 +19,7 @@ InstallDirRegKey HKCU "${REGAPP}" "InstallDir"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
-VIProductVersion "1.5.12.0"
+VIProductVersion "1.5.13.0"
 VIAddVersionKey "ProductName"     "Desk List"
 VIAddVersionKey "FileDescription" "Desk List 桌面待办清单"
 VIAddVersionKey "FileVersion"     "${VER}"

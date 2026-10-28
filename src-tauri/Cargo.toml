@@ -1,6 +1,6 @@
 [package]
 name = "desklist"
-version = "1.5.12"
+version = "1.5.13"
 description = "DeskList — 贴在桌面上的待办清单"
 authors = ["WoBok"]
 edition = "2021"
