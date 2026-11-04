@@ -1567,8 +1567,22 @@ function dragShift(){
   });
 }
 
-/* 拖到视口上下边缘时自动滚。滚动量记进 d.scrolled ——
-   落点算的是「指针挪了多少 + 滚了多少」，所以边滚边拖也不会错位。 */
+/* 行的位置一律放在「内容坐标」里算：行顶 = 原始槽位 + 指针位移 + 期间滚过的距离。
+   三条约束，缺一条就会出你说的那种乱套：
+   1. 不补滚动量，列表一滚，这一行就飘出指针 —— 松手时眼睛看到的位置和
+      算出来的落点不是一回事，等于「拖回原地就排不了序」；
+   2. 夹在第一个槽位和最后一个槽位之间，拖到顶 / 拖到底就停住，再怎么拖都不动；
+   3. 夹到边界之后自动滚也停，否则指针一直压在边上，滚动条就没完没了。 */
+const dragClamp = (d, top) => Math.max(0, Math.min((d.count - 1) * ROWH, top));
+
+/* 按 d.top 一次性画好：行往上抬多少、其余行让开几格、落点是第几位 */
+function dragPaint(){
+  const d = drag; if(!d) return;
+  d.el.style.transform = "translateY(" + (d.top - d.src * ROWH) + "px)";
+  const t = Math.max(0, Math.min(d.count - 1, Math.round(d.top / ROWH)));
+  if(t !== d.target){ d.target = t; dragShift(); }
+}
+
 function dragScrollStep(){
   dragRaf = 0;
   const d = drag; if(!d || !d.active || !d.el.isConnected) return;
@@ -1576,11 +1590,21 @@ function dragScrollStep(){
   let v = 0;
   if(d.lastY < r.top + EDGE) v = -(r.top + EDGE - d.lastY) / 3;
   else if(d.lastY > r.bottom - EDGE) v = (d.lastY - (r.bottom - EDGE)) / 3;
-  if(v){
+  /* 顶到第一 / 最后一位就不再滚（位子没了）；除非这一行正被视口切掉，
+     那就再滚一点把它整行带回来 —— 否则会停成「半行挂在边上」。 */
+  const bb = d.el.getBoundingClientRect();
+  const room = v < 0 ? d.top > 0.5 : d.top < (d.count - 1) * ROWH - 0.5;
+  const clipped = v < 0 ? bb.top < r.top - 0.5 : bb.bottom > r.bottom + 0.5;
+  if(v && (room || clipped)){
     v = Math.max(-7, Math.min(7, v));
     const before = scrollEl.scrollTop;
     scrollEl.scrollTop = Math.max(0, Math.min(rowMax(), before + v));
-    d.scrolled += scrollEl.scrollTop - before;
+    const moved = scrollEl.scrollTop - before;
+    if(moved){
+      /* 指针没动，是内容在滚：行要在内容里等量前移，才仍然停在指针底下 */
+      d.top = dragClamp(d, d.top + moved);
+      dragPaint();
+    }
   }
   dragRaf = requestAnimationFrame(dragScrollStep);
 }
@@ -1601,6 +1625,14 @@ function dragCommit(d){
   c.items.splice(d.target > d.src ? to + 1 : to, 0, moving);
 }
 
+/* 只清状态、不重排：留给「上一次拖没收尾，新的按下又来了」这种时候用 */
+function dragReset(){
+  if(dragRaf){ cancelAnimationFrame(dragRaf); dragRaf = 0; }
+  drag = null;
+  document.body.classList.remove("dragging");
+  dragRows().forEach(el=>{ el.classList.remove("drag"); el.style.transform = ""; });
+}
+
 function dragEnd(cancel){
   const d = drag; if(!d) return;
   drag = null;
@@ -1617,7 +1649,9 @@ function dragEnd(cancel){
 /* 拖拽期间不能有别的输入框在收尾 —— 那些 onblur 会在 110/120ms 后 render()，
    把正在拖的那一行换掉。所以草稿 / 改文字没收尾时，先不开拖。 */
 listEl.addEventListener("pointerdown", e=>{
-  if(e.button !== 0 || drag) return;
+  if(e.button !== 0) return;
+  /* 上一次拖没收干净（指针在窗口外松开之类），不清掉就再也拖不动了 */
+  if(drag) dragReset();
   if(draft || itemEditing) return;
   if(e.target.closest("input,button")) return;   /* 勾选框、改文字的输入框都不拖 */
   const el = e.target.closest(".row");
@@ -1626,7 +1660,7 @@ listEl.addEventListener("pointerdown", e=>{
   const src = rows.indexOf(el);
   if(src < 0) return;
   drag = {el, src, count:rows.length, y0:e.clientY, lastY:e.clientY, pid:e.pointerId,
-          scrolled:0, target:src, active:false};
+          scroll0:scrollEl.scrollTop, top:src * ROWH, target:src, active:false};
   /* 这里先不抓指针：一旦 setPointerCapture，后面的 click 会被改派到这一行上，
      「点文字改内容」就再也命中不了 .txt。等真的开始拖了再抓。 */
 });
@@ -1645,14 +1679,18 @@ listEl.addEventListener("pointermove", e=>{
     try{ d.el.setPointerCapture(d.pid); }catch(err){}
     if(!dragRaf) dragRaf = requestAnimationFrame(dragScrollStep);
   }
-  d.el.style.transform = "translateY(" + dy + "px)";
-  const t = Math.max(0, Math.min(d.count - 1, d.src + Math.round((dy + d.scrolled) / ROWH)));
-  if(t !== d.target){ d.target = t; dragShift(); }
+  /* 行顶 = 原始槽位 + 指针位移 + 这一路滚过的距离；夹在首尾之间 */
+  d.top = dragClamp(d, d.src * ROWH + dy + (scrollEl.scrollTop - d.scroll0));
+  dragPaint();
   if(e.cancelable) e.preventDefault();
 });
 
 listEl.addEventListener("pointerup", e=>{ if(e.button === 0) dragEnd(false); });
 listEl.addEventListener("pointercancel", ()=> dragEnd(true));
+/* 指针在窗口外松开时 listEl 收不到 up，补一张网 —— 否则拖拽状态一直挂着，
+   下一次按下会被「if(drag)」挡回去，表现就是彻底排不了序 */
+window.addEventListener("pointerup", e=>{ if(drag && e.button === 0) dragEnd(false); }, true);
+window.addEventListener("pointercancel", ()=>{ if(drag) dragEnd(true); }, true);
 window.addEventListener("blur", ()=>{ if(drag) dragEnd(true); });
 
 /* 捕获阶段先吃掉拖完那一次 click，别让下面的 data-act 分发再跑一遍。
