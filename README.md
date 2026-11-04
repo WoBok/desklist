@@ -20,6 +20,7 @@ Because pointer input passes through by default, it obstructs neither desktop ic
 - **`Ctrl+Alt+N`** — creates an item from any application
 - **Tray menu** — show, pin, unpin, quit
 - **Categories and archiving** — checking an item moves it to that category's completed list, where it can be restored or deleted; archiving clears it
+- **Drag to reorder** — hold an item and drag it up or down; the order is stored with the list
 - **Adjustable width** — drag the right edge, 320–520 px
 - **Interface language** — follows the system language (Chinese or English) and can be changed in Settings; the tray menu follows suit
 - **Local storage** — a single JSON file; no account, no synchronization, no telemetry

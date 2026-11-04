@@ -344,6 +344,22 @@ body.canvas.halo .draft input{
 .row.entering{animation:enter .17s ease}
 @keyframes enter{from{opacity:0;transform:translateY(-4px)}}
 
+/* ── 拖拽排序 ──
+   被拖的行浮起来跟着指针走，其余行让开一格，中间那个空槽就是落点。
+   位移只在 dragging 期间挂 transition：平时行上没有 transform 过渡，
+   才不会跟「勾掉一条」那段 leave 动画抢同一个属性。 */
+body.dragging,body.dragging .txt,body.dragging .box{cursor:grabbing}
+body.dragging .row{transition:transform .14s cubic-bezier(.4,0,.2,1)}
+body.dragging .row:hover{background:transparent}
+body.dragging .row.drag{
+  position:relative;z-index:3;transition:none;border-radius:6px;
+  background:var(--card);
+  /* 别用青色描边：那圈青一出来，这一行立刻变成「输入框」。
+     抬起来这层纸，靠的是白底 + 一道极轻的边 + 一点影子。 */
+  box-shadow:0 0 0 1px rgba(30,30,26,.075),0 8px 18px -10px rgba(30,30,26,.30);
+}
+body.dragging[data-tone="paper"] .row.drag{background:var(--card-paper)}
+
 /* 空状态 */
 .blank{
   display:flex;align-items:center;height:27px;padding:0 4px 0 24px;
@@ -1396,6 +1412,8 @@ function listPadTop(){
   return isFinite(v) ? v : 0;
 }
 function snapRows(){
+  /* 拖拽排序还没落定时不要去吸整行 —— 那是滚动条的位置，不是行的位置 */
+  if(drag) return;
   /* 只有「未唤起」才吸附整行：那时没有滚动条，停在半行会显得莫名其妙。
      唤醒 / 置顶态给了滚动条，位置就该由滚轮自由决定，再吸一下反而像被拽了一把。 */
   if(!isCalm()) return;
@@ -1523,6 +1541,131 @@ function syncWheelOk(){
    这条最常见的路径永远漏报，Rust 那边勾着 wheel_ok=false 不截滚轮，
    抽屉就彻底滚不动了。 */
 new ResizeObserver(()=>requestAnimationFrame(syncWheelOk)).observe(foldEl);
+
+/* ═══════════ 拖拽排序 ═══════════
+   按住一行上下拖，松手落定；位移不到 DRAG_SLOP 就还是原来那次点击
+   （进入改文字），所以「点文字改内容」这条手势一点没变。
+   落点直接写回 c.items 的数组顺序 —— 不新增排序字段，
+   renderList 照旧按 todoOf(c) 的顺序画，已有数据不用迁移。 */
+const DRAG_SLOP = 4;                 /* 超过 4px 才算拖，低于它的都当点击 */
+let drag = null;                     /* {el,src,count,y0,lastY,scrolled,target,active} */
+let dragRaf = 0;
+let suppressClick = false;           /* 拖完那一下的 click 要吞掉，否则会顺手进编辑 */
+
+const dragRows = () => [...listEl.children].filter(el=>el.classList.contains("row"));
+
+/* 让位：只改 transform，不动文档流。行高固定 28px，位移不触发重排，
+   滚到哪儿都不会把滚动位置挤歪。 */
+function dragShift(){
+  const d = drag; if(!d) return;
+  dragRows().forEach((el,i)=>{
+    if(el === d.el) return;
+    let y = 0;
+    if(d.src < d.target && i > d.src && i <= d.target) y = -ROWH;
+    else if(d.src > d.target && i >= d.target && i < d.src) y = ROWH;
+    el.style.transform = y ? "translateY(" + y + "px)" : "";
+  });
+}
+
+/* 拖到视口上下边缘时自动滚。滚动量记进 d.scrolled ——
+   落点算的是「指针挪了多少 + 滚了多少」，所以边滚边拖也不会错位。 */
+function dragScrollStep(){
+  dragRaf = 0;
+  const d = drag; if(!d || !d.active || !d.el.isConnected) return;
+  const r = scrollEl.getBoundingClientRect(), EDGE = 22;
+  let v = 0;
+  if(d.lastY < r.top + EDGE) v = -(r.top + EDGE - d.lastY) / 3;
+  else if(d.lastY > r.bottom - EDGE) v = (d.lastY - (r.bottom - EDGE)) / 3;
+  if(v){
+    v = Math.max(-7, Math.min(7, v));
+    const before = scrollEl.scrollTop;
+    scrollEl.scrollTop = Math.max(0, Math.min(rowMax(), before + v));
+    d.scrolled += scrollEl.scrollTop - before;
+  }
+  dragRaf = requestAnimationFrame(dragScrollStep);
+}
+
+/* 落定：先摘出来，再插到目标项的前面或后面。
+   往下拖是「插到目标之后」，往上拖是「插到目标之前」——
+   这里如果照抄同一个索引，往下拖一格会纹丝不动（先删已经把下标挪掉了）。 */
+function dragCommit(d){
+  const c = cat(); if(!c) return;
+  const todos = c.items.filter(i=>!i.done);
+  const moving = todos[d.src], onto = todos[d.target];
+  if(!moving || !onto || moving === onto) return;
+  const at = c.items.indexOf(moving);
+  if(at < 0) return;
+  c.items.splice(at, 1);
+  const to = c.items.indexOf(onto);
+  if(to < 0){ c.items.splice(at, 0, moving); return; }
+  c.items.splice(d.target > d.src ? to + 1 : to, 0, moving);
+}
+
+function dragEnd(cancel){
+  const d = drag; if(!d) return;
+  drag = null;
+  if(dragRaf){ cancelAnimationFrame(dragRaf); dragRaf = 0; }
+  document.body.classList.remove("dragging");
+  if(!d.active) return;               /* 没动过 = 一次普通点击，交给 click 去改文字 */
+  /* 拖完浏览器还会补发一次 click，不拦住就会顺手进「改文字」 */
+  suppressClick = true;
+  setTimeout(()=>{ suppressClick = false; }, 350);
+  if(!cancel && d.el.isConnected && d.target !== d.src) dragCommit(d);
+  render();   /* 重建列表：顺序天然来自 c.items，行上不会留下任何内联位移 */
+}
+
+/* 拖拽期间不能有别的输入框在收尾 —— 那些 onblur 会在 110/120ms 后 render()，
+   把正在拖的那一行换掉。所以草稿 / 改文字没收尾时，先不开拖。 */
+listEl.addEventListener("pointerdown", e=>{
+  if(e.button !== 0 || drag) return;
+  if(draft || itemEditing) return;
+  if(e.target.closest("input,button")) return;   /* 勾选框、改文字的输入框都不拖 */
+  const el = e.target.closest(".row");
+  if(!el || el.classList.contains("leaving")) return;
+  const rows = dragRows();
+  const src = rows.indexOf(el);
+  if(src < 0) return;
+  drag = {el, src, count:rows.length, y0:e.clientY, lastY:e.clientY, pid:e.pointerId,
+          scrolled:0, target:src, active:false};
+  /* 这里先不抓指针：一旦 setPointerCapture，后面的 click 会被改派到这一行上，
+     「点文字改内容」就再也命中不了 .txt。等真的开始拖了再抓。 */
+});
+
+listEl.addEventListener("pointermove", e=>{
+  const d = drag; if(!d) return;
+  if(!d.el.isConnected){ drag = null; document.body.classList.remove("dragging"); return; }
+  d.lastY = e.clientY;
+  const dy = e.clientY - d.y0;
+  if(!d.active){
+    if(Math.abs(dy) < DRAG_SLOP) return;
+    d.active = true;
+    d.el.classList.add("drag");
+    document.body.classList.add("dragging");
+    /* 真开始拖了才抓指针：拖到列表外面（越过卡片、贴到屏幕边）也还能收到 move/up */
+    try{ d.el.setPointerCapture(d.pid); }catch(err){}
+    if(!dragRaf) dragRaf = requestAnimationFrame(dragScrollStep);
+  }
+  d.el.style.transform = "translateY(" + dy + "px)";
+  const t = Math.max(0, Math.min(d.count - 1, d.src + Math.round((dy + d.scrolled) / ROWH)));
+  if(t !== d.target){ d.target = t; dragShift(); }
+  if(e.cancelable) e.preventDefault();
+});
+
+listEl.addEventListener("pointerup", e=>{ if(e.button === 0) dragEnd(false); });
+listEl.addEventListener("pointercancel", ()=> dragEnd(true));
+window.addEventListener("blur", ()=>{ if(drag) dragEnd(true); });
+
+/* 捕获阶段先吃掉拖完那一次 click，别让下面的 data-act 分发再跑一遍。
+   render() 已经把按下时那一行换掉了，浏览器往往干脆不补发 click，
+   所以这个标志不能只靠「下一次 click」来清 —— 任何一次新的按下就作废，
+   否则拖完 350ms 内点勾选框会被白吞一下。 */
+window.addEventListener("pointerdown", ()=>{ suppressClick = false; }, true);
+window.addEventListener("click", e=>{
+  if(!suppressClick) return;
+  suppressClick = false;
+  e.stopPropagation();
+  e.preventDefault();
+}, true);
 
 /* ═══════════ 交互（统一 data-act 分发，避免选择器漏项） ═══════════ */
 document.addEventListener("click", e=>{
@@ -2225,6 +2368,9 @@ function scrollBoxAt(x, y){
 let hookWheelAt = 0;
 function handleWheel(p){
   if(panelOpen) return;
+  /* 正在拖行的时候滚轮一律不理：自动滚由 dragScrollStep 负责，
+     再叠一个滚轮进来落点会跟着跳 */
+  if(drag && drag.active) return;
   const delta = typeof p === "number" ? p : (p && p.d) || 0;
   if(!delta) return;
   hookWheelAt = performance.now();
