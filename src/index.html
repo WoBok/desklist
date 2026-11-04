@@ -355,9 +355,15 @@ body.dragging .row.drag{
   position:relative;z-index:3;transition:none;border-radius:6px;
   background:var(--card);
   /* 别用青色描边：那圈青一出来，这一行立刻变成「输入框」。
-     抬起来这层纸，靠的是白底 + 一道极轻的边 + 一点影子。 */
-  box-shadow:0 0 0 1px rgba(30,30,26,.075),0 8px 18px -10px rgba(30,30,26,.30);
+     抬起来这层纸，靠的是白底 + 一道极轻的边 + 一点影子。
+     这道边必须画在盒内（inset）：拖到列表最上 / 最下时整行贴着
+     滚动视口的裁切边，画在盒外的 1px 会被 overflow 直接剪掉 ——
+     看起来就是「拖到底下边框不见了」。 */
+  box-shadow:inset 0 0 0 1px rgba(30,30,26,.085),0 8px 18px -10px rgba(30,30,26,.30);
 }
+/* 贴着列表下沿时把外投影收掉：那半截影子本来就被裁在边外，
+   留着只会让下边缘显出一条硬切口。盒内的边始终完整。 */
+body.dragging .row.drag.low{box-shadow:inset 0 0 0 1px rgba(30,30,26,.11)}
 body.dragging[data-tone="paper"] .row.drag{background:var(--card-paper)}
 
 /* 空状态 */
@@ -1581,6 +1587,10 @@ function dragPaint(){
   d.el.style.transform = "translateY(" + (d.top - d.src * ROWH) + "px)";
   const t = Math.max(0, Math.min(d.count - 1, Math.round(d.top / ROWH)));
   if(t !== d.target){ d.target = t; dragShift(); }
+  /* 整行贴到列表下沿时换一套投影：外投影会被滚动视口裁成硬切口。
+     这一层的边框画在盒内，所以贴边也完整可见。 */
+  const bb = d.el.getBoundingClientRect();
+  d.el.classList.toggle("low", bb.bottom >= scrollEl.getBoundingClientRect().bottom - 1);
 }
 
 function dragScrollStep(){
@@ -1630,7 +1640,7 @@ function dragReset(){
   if(dragRaf){ cancelAnimationFrame(dragRaf); dragRaf = 0; }
   drag = null;
   document.body.classList.remove("dragging");
-  dragRows().forEach(el=>{ el.classList.remove("drag"); el.style.transform = ""; });
+  dragRows().forEach(el=>{ el.classList.remove("drag"); el.classList.remove("low"); el.style.transform = ""; });
 }
 
 function dragEnd(cancel){
