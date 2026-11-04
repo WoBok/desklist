@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "desklist"
-version = "1.5.15"
+version = "1.5.16"
 dependencies = [
  "core-graphics 0.23.2",
  "serde",
