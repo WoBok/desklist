@@ -2199,4 +2199,22 @@ mod upd_tests {
         /* 同一个版本不该再报更新 */
         assert!(check_manifest(&got.version).is_none());
     }
+
+    /* 按清单真下一次安装包：哈希、大小都必须对得上。
+       发版时最要命的一种错是清单里的 sha256 和资产不是同一次构建 ——
+       那会让所有人的更新都卡在「校验不通过」，所以这条要真跑一遍。 */
+    #[test]
+    #[ignore]
+    fn live_download_matches_the_manifest_hash() {
+        let info = check_manifest("1.0.0").expect("应该读到线上清单");
+        let resp = http(180).unwrap().get(&info.url).send().unwrap();
+        assert!(resp.status().is_success(), "下载失败：{}", resp.status());
+        let total = resp.content_length().unwrap_or(0);
+        let path = update_dir().join("live-test.exe");
+        save_verified(resp, &path, &info.sha256, total, |_| {}).expect("哈希必须对得上");
+        let len = std::fs::metadata(&path).unwrap().len();
+        assert_eq!(len, info.size, "清单里的大小和实际文件不一致");
+        println!("下载 {} 字节，哈希与清单一致", len);
+        let _ = std::fs::remove_file(&path);
+    }
 }
