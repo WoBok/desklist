@@ -74,12 +74,16 @@ body{
   padding:15px 15px 13px;
   display:flex;flex-direction:column;gap:0;
   overflow:hidden;
+  /* 底色/影子始终带过渡：设置里的「当场预览」要靠它来回淡，
+     否则一亮一透都是硬切。真正的置顶 ↔ 贴合切换有 .switching 掐掉过渡。 */
+  transition:background-color .18s ease,box-shadow .18s ease,backdrop-filter .18s ease;
 }
 /* 置顶态：白卡 + 极轻的边界，不再拖一大片灰雾 */
 body.pinned .card{box-shadow:0 0 0 1px rgba(30,30,26,.075)}
-/* 焦点外发光：只在点中卡片时亮一圈 */
-body.pinned:not(.noRing).focus .card,
-body.pinned:not(.noRing) .card:focus-within{
+/* 焦点外发光：只在点中卡片时亮一圈。预览态不参与 —— 那时卡片是贴合态的样子，
+   底下没有白卡，亮一圈青边就成了凭空多出来的东西。 */
+body.pinned:not(.noRing):not(.peek).focus .card,
+body.pinned:not(.noRing):not(.peek) .card:focus-within{
   box-shadow:
     0 0 0 1.5px rgba(60,119,103,.80),
     0 0 12px 0 rgba(60,119,103,.34),
@@ -165,6 +169,54 @@ body:not(.pinned):not(.wake) .add,
 body:not(.pinned):not(.wake) .folds{
   display:none;
 }
+
+/* ══════════ 设置里的「当场预览」 ══════════
+   问题：设置一打开，卡片就是置顶态（不透明白卡）；而底衬、桌面字色、光晕
+   这几项只在贴合态才挂得上，改的时候屏幕上一点反应都没有。
+
+   解法：不切状态，只换画面。窗口仍然置顶、仍然可点、尺寸一点不动，
+   只把卡片的底色/字色/光晕按贴合态的规则画一遍。
+   为什么不真的切过去：卡片和面板是同一个窗口，真切贴合态要下沉 + 变穿透，
+   面板会跟着一起消失在别的窗口后面，还点不了；每点一下色板都要重建一次
+   Z 序、重挂一次置顶，点三下就抖。
+
+   层级由「最后动的是哪一项」决定：
+     data-peek="idle" —— 未唤起底衬 / 桌面字色 / 光晕
+     data-peek="wake" —— 唤醒时底衬（这一层真要 Ctrl 才看得见，只能这样演）
+   判定和卡片里 body.canvas 共用一条（见 syncCanvas），不另立一套。 */
+body.peek[data-peek="idle"][data-idle="white"] .card{
+  background:#FFFFFF;
+  box-shadow:0 0 0 .5px rgba(30,30,26,.055),0 6px 18px -14px rgba(30,30,26,.22);
+}
+body.peek[data-peek="idle"][data-idle="paper"] .card{
+  background:#FBFAF6;
+  box-shadow:0 0 0 .5px rgba(30,30,26,.055),0 6px 18px -14px rgba(30,30,26,.20);
+}
+body.peek[data-peek="idle"][data-idle="none"] .card{background:transparent;box-shadow:none}
+
+body.peek[data-peek="wake"][data-backing="white"] .card{
+  background:#FFFFFF;
+  box-shadow:0 0 0 .5px rgba(30,30,26,.07),0 10px 26px -14px rgba(30,30,26,.30);
+}
+body.peek[data-peek="wake"][data-backing="paper"] .card{
+  background:#FBFAF6;
+  box-shadow:0 0 0 .5px rgba(30,30,26,.07),0 10px 26px -14px rgba(30,30,26,.30);
+}
+body.peek[data-peek="wake"][data-backing="veil"] .card{
+  background:rgba(251,250,246,.74);
+  backdrop-filter:blur(18px) saturate(1.18);
+  box-shadow:0 0 0 .5px rgba(30,30,26,.07),0 10px 26px -14px rgba(30,30,26,.26);
+}
+body.peek[data-peek="wake"][data-backing="none"] .card{
+  background:transparent;box-shadow:none;backdrop-filter:none;
+}
+/* 勾选框的底色跟真贴合态一样：通透时一律透明，有白/纸底才给一点白 */
+body.peek .box{background:transparent}
+body.peek[data-peek="idle"][data-idle="white"] .box,
+body.peek[data-peek="idle"][data-idle="paper"] .box,
+body.peek[data-peek="wake"][data-backing="white"] .box,
+body.peek[data-peek="wake"][data-backing="paper"] .box,
+body.peek[data-peek="wake"][data-backing="veil"] .box{background:rgba(255,255,255,.66)}
 
 /* ══════════ 顶部 Tab ══════════ */
 .head{
@@ -329,10 +381,12 @@ body.canvas.halo .row .txi{
   text-shadow:0 0 1.5px var(--halo),0 1px 3px var(--halo);
 }
 .row.editing:hover{background:transparent}
-/* 「文字颜色」只在 贴合态 · 未唤起 · 通透底衬 这一种情形下生效：
+/* 「桌面文字颜色」只在 贴合态 · 未唤起 · 通透底衬 这一种情形下生效：
    那时文字是直接压在壁纸上的，才需要用户自己挑一个看得清的颜色。
-   一旦有了白/纸底衬，就回到默认墨色，以免白底上打浅字。 */
+   一旦有了白/纸底衬，就回到默认墨色，以免白底上打浅字。
+   颜色和光晕都带过渡：设置里预览切换时，字是一路淡过去的，不是啪地换色。 */
 body.canvas .txt{color:var(--item-ink)}
+.txt{transition:color .18s ease,text-shadow .18s ease}
 /* 文字光晕：同样只给这种情形，而且只给待办文字本身（Tab / 已完成 / 按钮都不带） */
 body.canvas.halo .txt,
 body.canvas.halo .blank,
@@ -726,6 +780,9 @@ select.sel:hover{border-color:#D5D2C8}
 }
 .sw-pick input{position:absolute;inset:-4px;opacity:0;cursor:pointer}
 
+/* 设置段头的补充说明：一句话交代「这一段的改动在哪里看」 */
+.sec-tip{margin:-3px 0 7px;font-size:10px;line-height:1.45;color:#9C9A92}
+
 .rng{
   -webkit-appearance:none;appearance:none;width:118px;height:3px;border-radius:2px;
   background:#E4E1D8;outline:0;cursor:pointer;
@@ -859,7 +916,8 @@ const I18N = {
     size:"字号", sizeHint:"只缩放待办文字",
     sSmall:"小", sStd:"标准", sLarge:"大", sXL:"特大",
     weight:"字重", wReg:"常规", wMed:"中黑", wBold:"加粗",
-    italic:"斜体", ink:"文字颜色", inkHint:"仅「未唤起 + 通透」时生效，其余保持墨色",
+    italic:"斜体", ink:"桌面文字颜色", inkHint:"底衬通透时才用得上",
+    secTipIdle:"改这里时，卡片会当场换成桌面上的样子",
     custom:"自定义",
     secIdle:"贴合态", idleBacking:"未唤起底衬", idleHint:"贴在桌面上、没碰它时的样子",
     cWhite:"纯白", cPaper:"纸白", cNone:"通透", cVeil:"半透",
@@ -901,7 +959,8 @@ const I18N = {
     size:"Size", sizeHint:"Scales item text only",
     sSmall:"Small", sStd:"Normal", sLarge:"Large", sXL:"X-Large",
     weight:"Weight", wReg:"Regular", wMed:"Medium", wBold:"Bold",
-    italic:"Italic", ink:"Text colour", inkHint:"Only when idle and see-through; otherwise ink",
+    italic:"Italic", ink:"Desktop text colour", inkHint:"Only when the backing is see-through",
+    secTipIdle:"The card switches to its desktop look while you edit here",
     custom:"Custom",
     secIdle:"On the desktop", idleBacking:"Backing when idle", idleHint:"How it looks while resting on the desktop",
     cWhite:"White", cPaper:"Paper", cNone:"None", cVeil:"Veil",
@@ -1196,11 +1255,28 @@ function applyPrefs(){
    贴合态 + 当时那一层底衬是通透。一旦有白底/纸底托着，
    就回到默认墨色 —— 白底上打浅字谁也看不清。
    注意判的是「此刻字后面有没有底」，不是「有没有唤起」：
-   唤起后底衬仍是通透的话，颜色不该突然跳回墨色。 */
+   唤起后底衬仍是通透的话，颜色不该突然跳回墨色。
+   设置里的预览态（body.peek）也算贴合态，否则改字色时照样挂不上。 */
 function syncCanvas(){
-  const wake = document.body.classList.contains("wake");
-  const raw = wake ? (S.prefs.backing || "veil") : (S.prefs.idle || "none");
-  document.body.classList.toggle("canvas", !S.pinned && raw === "none");
+  const B = document.body, peek = B.dataset.peek;
+  const raw = peek === "wake" ? (S.prefs.backing || "veil")
+            : peek === "idle" ? (S.prefs.idle || "none")
+            : B.classList.contains("wake") ? (S.prefs.backing || "veil")
+            : (S.prefs.idle || "none");
+  B.classList.toggle("canvas", (!!peek || !S.pinned) && raw === "none");
+}
+
+/* 设置面板里的「当场预览」：只换画面，不动窗口。
+   卡片和面板是同一个窗口 —— 真去切贴合态就得下沉 + 变穿透，
+   面板会跟着消失、也点不了；这里只把底衬/字色/光晕按贴合态的规则重画一遍，
+   窗口仍旧置顶，后面的窗口挡不住它。
+   layer："idle" = 未唤起那一层，"wake" = 唤起时那一层；null = 回到真实状态。 */
+function setPeek(layer){
+  const B = document.body;
+  const on = panelOpen && !!layer;
+  B.classList.toggle("peek", on);
+  if(on) B.dataset.peek = layer; else delete B.dataset.peek;
+  syncCanvas();
 }
 
 /* ═══════════ 渲染 ═══════════ */
@@ -1795,7 +1871,7 @@ document.addEventListener("click", e=>{
     case "closeSettings": closeSettings(); return;
     case "resetPrefs": {
       S.prefs = {...DEFAULT_PREFS};
-      applyPrefs(); applyShortcuts(); renderSettings(); render(); save(); return;
+      setPeek(null); applyPrefs(); applyShortcuts(); renderSettings(); render(); save(); return;
     }
     case "update": {
       if(UPD.state === "ready") updDownload();
@@ -1806,22 +1882,25 @@ document.addEventListener("click", e=>{
     case "lang": {
       S.prefs.lang = arg; setLang(S.prefs);
       invoke("set_lang", { lang: LANG });
-      render(); renderSettings(); save();
+      setPeek(null); render(); renderSettings(); save();
       /* 语言换了，文案行数变了，面板与窗口高度都要重算 */
       requestAnimationFrame(fitPanel);
       return;
     }
-    case "font": S.prefs.font = arg; applyPrefs(); renderSettings(); save(); return;
-    case "scale": S.prefs.scale = parseFloat(arg); applyPrefs(); renderSettings(); render(); save(); return;
-    case "weight": S.prefs.weight = parseInt(arg,10); applyPrefs(); renderSettings(); render(); save(); return;
-    case "italic": S.prefs.italic = !S.prefs.italic; applyPrefs(); renderSettings(); render(); save(); return;
-    case "ink": S.prefs.ink = arg; applyPrefs(); renderSettings(); save(); return;
-    case "haloColor": S.prefs.haloColor = arg; applyPrefs(); renderSettings(); save(); return;
-    case "tone": S.prefs.tone = arg; applyPrefs(); renderSettings(); save(); return;
-    case "idle": S.prefs.idle = arg; applyPrefs(); renderSettings(); save(); return;
-    case "backing": S.prefs.backing = arg; applyPrefs(); renderSettings(); save(); return;
-    case "halo": S.prefs.halo = !S.prefs.halo; applyPrefs(); renderSettings(); save(); return;
-    case "ring": S.prefs.ring = !S.prefs.ring; applyPrefs(); renderSettings(); save(); return;
+    /* 预览层跟着「动的哪一项」走：
+       贴合态那一段 → 卡片换成桌面上的样子（未唤起 / 唤起两层分开演）；
+       其余各段（含置顶态的外观）→ 回到白卡，否则改卡片底色时又看不见了。 */
+    case "font": S.prefs.font = arg; setPeek(null); applyPrefs(); renderSettings(); save(); return;
+    case "scale": S.prefs.scale = parseFloat(arg); setPeek(null); applyPrefs(); renderSettings(); render(); save(); return;
+    case "weight": S.prefs.weight = parseInt(arg,10); setPeek(null); applyPrefs(); renderSettings(); render(); save(); return;
+    case "italic": S.prefs.italic = !S.prefs.italic; setPeek(null); applyPrefs(); renderSettings(); render(); save(); return;
+    case "ink": S.prefs.ink = arg; setPeek("idle"); applyPrefs(); renderSettings(); save(); return;
+    case "haloColor": S.prefs.haloColor = arg; setPeek("idle"); applyPrefs(); renderSettings(); save(); return;
+    case "tone": S.prefs.tone = arg; setPeek(null); applyPrefs(); renderSettings(); save(); return;
+    case "idle": S.prefs.idle = arg; setPeek("idle"); applyPrefs(); renderSettings(); save(); return;
+    case "backing": S.prefs.backing = arg; setPeek("wake"); applyPrefs(); renderSettings(); save(); return;
+    case "halo": S.prefs.halo = !S.prefs.halo; setPeek("idle"); applyPrefs(); renderSettings(); save(); return;
+    case "ring": S.prefs.ring = !S.prefs.ring; setPeek(null); applyPrefs(); renderSettings(); save(); return;
     case "autostart": {
       S.prefs.autostart = !S.prefs.autostart;
       invoke("set_autostart", {on:S.prefs.autostart});
@@ -2231,17 +2310,11 @@ function renderSettings(){
         <div class="fl"><b>${t("italic")}</b></div>
         <button class="sw" data-act="italic" data-on="${P.italic?'1':'0'}"></button>
       </div>
-      <div class="field">
-        <div class="fl"><b>${t("ink")}</b><i>${t("inkHint")}</i></div>
-        <div class="swatches">
-          ${INKS.map(c=>`<button class="sw-dot" data-act="ink:${c}" data-on="${(P.ink||'').toLowerCase()===c.toLowerCase()?'1':'0'}" style="background:${c}"></button>`).join("")}
-          <label class="sw-pick" title="${t('custom')}"><input type="color" id="inkPick" value="${P.ink}"></label>
-        </div>
-      </div>
     </div>
 
     <div class="sec">
       <h4>${t("secIdle")}</h4>
+      <div class="sec-tip">${t("secTipIdle")}</div>
       <div class="field">
         <div class="fl"><b>${t("idleBacking")}</b><i>${t("idleHint")}</i></div>
         ${seg([{v:"white",t:t("cWhite")},{v:"paper",t:t("cPaper")},{v:"none",t:t("cNone")}], P.idle, "idle")}
@@ -2249,6 +2322,13 @@ function renderSettings(){
       <div class="field">
         <div class="fl"><b>${t("wakeBacking")}</b><i>${t("wakeHint")}</i></div>
         ${seg([{v:"white",t:t("cWhite")},{v:"paper",t:t("cPaper")},{v:"veil",t:t("cVeil")}], P.backing, "backing")}
+      </div>
+      <div class="field">
+        <div class="fl"><b>${t("ink")}</b><i>${t("inkHint")}</i></div>
+        <div class="swatches">
+          ${INKS.map(c=>`<button class="sw-dot" data-act="ink:${c}" data-on="${(P.ink||'').toLowerCase()===c.toLowerCase()?'1':'0'}" style="background:${c}"></button>`).join("")}
+          <label class="sw-pick" title="${t('custom')}"><input type="color" id="inkPick" value="${P.ink}"></label>
+        </div>
       </div>
       <div class="field">
         <div class="fl"><b>${t("halo")}</b><i>${t("haloHint")}</i></div>
@@ -2308,15 +2388,15 @@ function renderSettings(){
   const fs = $("#fontSel");
   if(fs) fs.onchange = e => { S.prefs.font = e.target.value; applyPrefs(); save(); };
   const ip = $("#inkPick");
-  if(ip) ip.oninput = e => { S.prefs.ink = e.target.value; applyPrefs(); save(); };
+  if(ip) ip.oninput = e => { S.prefs.ink = e.target.value; setPeek("idle"); applyPrefs(); save(); };
   const hp = $("#haloPick");
-  if(hp) hp.oninput = e => { S.prefs.haloColor = e.target.value; applyPrefs(); save(); };
+  if(hp) hp.oninput = e => { S.prefs.haloColor = e.target.value; setPeek("idle"); applyPrefs(); save(); };
   const rng = $("#maxhRng");
   if(rng){
     rng.oninput = e => {
       S.prefs.maxH = parseInt(e.target.value, 10);
       $("#maxhVal").textContent = S.prefs.maxH + "px";
-      applyPrefs(); save(); requestAnimationFrame(reportHeight);
+      setPeek(null); applyPrefs(); save(); requestAnimationFrame(reportHeight);
     };
   }
 }
@@ -2346,6 +2426,8 @@ function openSettings(){
     invoke("set_pin", { pinned: true });
     syncCanvas();
   }
+  /* 一进来先看真实的置顶态；等你在「贴合态」那一段动手，卡片才换画面 */
+  setPeek(null);
 
   /* 卡片宽度先量下来钉死：窗口要往旁边长，卡片自己不能被拉伸 */
   const cr = cardEl.getBoundingClientRect();
@@ -2374,6 +2456,8 @@ function openSettings(){
 function closeSettings(){
   if(!panelOpen) return;
   panelOpen = false;
+  /* 面板一收，预览就撤：卡片要回到它此刻真实该有的样子 */
+  setPeek(null);
   /* 先把卡片宽度用内联样式钉死：窗口要缩回去，若这时让 .card 回到 width:100%，
      它会在那一帧被拉成整个窗口宽度，ResizeObserver 立刻把这个错误宽度上报出去，
      窗口就再也收不回来了（实测会停在 600px） */
@@ -2603,9 +2687,13 @@ window.addEventListener("mouseup", ()=>{
 });
 
 /* ═══════════ 起 ═══════════ */
+/* 首帧先掐掉卡片过渡：卡片底色要按 prefs 从默认值改一次
+   （出厂是纸白，HTML 上写的是纯白），不掐的话开机会看到它白着淡成纸白。 */
+document.body.classList.add("switching");
 applyPrefs();
 render();
 applyShortcuts();
+requestAnimationFrame(()=>requestAnimationFrame(()=>document.body.classList.remove("switching")));
 
 /* localStorage 万一读不出来（WebView2 偶发不落盘），用文件镜像顶上 */
 recoverFromFile();
