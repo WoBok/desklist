@@ -1195,6 +1195,202 @@ fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/* ── 自动更新 ─────────────────────────────────────────────────
+   为什么不放前端下：GitHub 的 Release 资产（release-assets.githubusercontent.com）
+   不带 Access-Control-Allow-Origin，WebView 里 fetch 会被 CORS 直接拦掉。
+   所以整条链放 Rust：取清单 → 下安装包（边下边报进度）→ 验哈希 → 拉起来。 */
+
+const UPD_MANIFEST: [&str; 2] = [
+    "https://github.com/WoBok/desklist/releases/latest/download/updater.json",
+    /* GitHub 直连不稳时用 CDN 兜底；这份是跟着仓库走的，会有半天延迟 */
+    "https://cdn.jsdelivr.net/gh/WoBok/desklist@main/updater.json",
+];
+
+#[derive(serde::Serialize)]
+struct UpdInfo {
+    version: String,
+    url: String,
+    sha256: String,
+    size: u64,
+}
+
+fn update_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join("desklist-update")
+}
+
+fn http(secs: u64) -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .user_agent(concat!("DeskList/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(secs))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/* 版本比大小：只认点分数字，缺位按 0 算 */
+fn newer(a: &str, b: &str) -> bool {
+    let p: Vec<u64> = a.split('.').map(|x| x.parse().unwrap_or(0)).collect();
+    let q: Vec<u64> = b.split('.').map(|x| x.parse().unwrap_or(0)).collect();
+    for i in 0..p.len().max(q.len()) {
+        let (x, y) = (*p.get(i).unwrap_or(&0), *q.get(i).unwrap_or(&0));
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
+/* 返回 None = 没有更新，或者压根没查到。两种情况前端都不出声。 */
+#[tauri::command]
+fn update_check() -> Option<UpdInfo> {
+    let cur = env!("CARGO_PKG_VERSION");
+    let client = http(15).ok()?;
+    for src in UPD_MANIFEST {
+        let body: serde_json::Value = match client.get(src).send().and_then(|r| r.json()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let version = body["version"]
+            .as_str()
+            .unwrap_or("")
+            .trim_start_matches(['v', 'V'])
+            .to_string();
+        let url = body["url"].as_str().unwrap_or("").to_string();
+        let sha256 = body["sha256"].as_str().unwrap_or("").to_ascii_lowercase();
+        let size = body["size"].as_u64().unwrap_or(0);
+        /* 清单是不可信输入：只认 https、只认 64 位十六进制、版本号只认数字和点 */
+        if !url.starts_with("https://")
+            || sha256.len() != 64
+            || !sha256.chars().all(|c| c.is_ascii_hexdigit())
+            || version.is_empty()
+            || version.len() > 20
+            || !version.chars().all(|c| c.is_ascii_digit() || c == '.')
+        {
+            continue;
+        }
+        if !newer(&version, cur) {
+            return None;
+        }
+        return Some(UpdInfo { version, url, sha256, size });
+    }
+    None
+}
+
+/* 边收边算哈希：全部收完才比对，对不上就把文件删掉，绝不留半截货 */
+fn save_verified(
+    mut src: impl std::io::Read,
+    path: &std::path::Path,
+    sha256: &str,
+    total: u64,
+    mut on_pct: impl FnMut(i32),
+) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+
+    let mut file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut got: u64 = 0;
+    let mut last: i32 = -1;
+    loop {
+        let n = match src.read(&mut buf) {
+            Ok(n) => n,
+            Err(e) => {
+                drop(file);
+                let _ = std::fs::remove_file(path);
+                return Err(e.to_string());
+            }
+        };
+        if n == 0 {
+            break;
+        }
+        if let Err(e) = file.write_all(&buf[..n]) {
+            drop(file);
+            let _ = std::fs::remove_file(path);
+            return Err(e.to_string());
+        }
+        hasher.update(&buf[..n]);
+        got += n as u64;
+        if total > 0 {
+            let pct = (got * 100 / total) as i32;
+            if pct != last {
+                last = pct;
+                on_pct(pct.min(99));
+            }
+        }
+    }
+    drop(file);
+
+    let digest: String = hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect();
+    if !digest.eq_ignore_ascii_case(sha256.trim()) {
+        let _ = std::fs::remove_file(path);
+        return Err("安装包校验不通过".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn update_download(
+    app: tauri::AppHandle,
+    url: String,
+    version: String,
+    sha256: String,
+) -> Result<String, String> {
+    if version.is_empty()
+        || version.len() > 20
+        || !version.chars().all(|c| c.is_ascii_digit() || c == '.')
+    {
+        return Err("版本号不合法".into());
+    }
+    if !url.starts_with("https://") {
+        return Err("只接受 https 下载地址".into());
+    }
+
+    let dir = update_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("DeskList-Setup-{}.exe", version));
+    let _ = std::fs::remove_file(&path);
+
+    let resp = http(600)
+        .map_err(|e| e.to_string())?
+        .get(&url)
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("下载失败 HTTP {}", resp.status()));
+    }
+    let total = resp.content_length().unwrap_or(0);
+
+    let mut last: i32 = -1;
+    save_verified(resp, &path, &sha256, total, |pct| {
+        if pct != last {
+            last = pct;
+            let _ = app.emit("upd-progress", pct);
+        }
+    })?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn update_run(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    /* 只允许执行刚落在临时目录里的那个安装包，别被人拿去当通用启动器 */
+    let p = std::path::PathBuf::from(&path);
+    let dir = update_dir();
+    if p.parent() != Some(dir.as_path())
+        || p.extension().and_then(|s| s.to_str()) != Some("exe")
+    {
+        return Err("路径不合法".into());
+    }
+    /* /S 静默安装：装完由 setup.nsi 自己把新版本拉起来，这里只要让开位置 */
+    std::process::Command::new(&p)
+        .arg("/S")
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    thread::sleep(Duration::from_millis(200));
+    app.exit(0);
+    Ok(())
+}
+
 #[tauri::command]
 fn exit_settings(window: WebviewWindow) {
     SETTINGS.store(false, Ordering::Relaxed);
@@ -1590,6 +1786,9 @@ fn main() {
             fit_settings,
             exit_settings,
             app_version,
+            update_check,
+            update_download,
+            update_run,
             set_shortcuts,
             set_lang,
             set_autostart,
@@ -1912,4 +2111,71 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running DeskList");
+}
+
+#[cfg(test)]
+mod upd_tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn compares_versions_by_number_not_text() {
+        assert!(newer("1.6.0", "1.5.16"));
+        assert!(!newer("1.5.16", "1.6.0"));
+        assert!(!newer("1.6.0", "1.6.0"));
+        /* 按数字比，不是按字符串：1.10 比 1.9 大 */
+        assert!(newer("1.10.0", "1.9.9"));
+        assert!(newer("2", "1.99.99"));
+    }
+
+    #[test]
+    fn keeps_the_file_only_when_the_hash_matches() {
+        use sha2::{Digest, Sha256};
+        let dir = update_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let data = vec![7u8; 200_000];
+        let sha: String = Sha256::digest(&data)
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
+
+        let good = dir.join("test-good.exe");
+        let mut pcts = Vec::new();
+        save_verified(
+            std::io::Cursor::new(data.clone()),
+            &good,
+            &sha,
+            data.len() as u64,
+            |p| pcts.push(p),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&good).unwrap().len(), data.len());
+        assert!(!pcts.is_empty(), "下载过程应该报过进度");
+        assert!(pcts.iter().all(|p| *p <= 99), "拖到 100% 会把话说满，实际还没装");
+
+        /* 校验不过：必须删掉，不能留一个半截 exe 在临时目录里 */
+        let bad = dir.join("test-bad.exe");
+        assert!(save_verified(
+            std::io::Cursor::new(data.clone()),
+            &bad,
+            &"0".repeat(64),
+            data.len() as u64,
+            |_| {}
+        )
+        .is_err());
+        assert!(!bad.exists());
+
+        /* 读到一半断了：同样不能留下来 */
+        struct Boom;
+        impl Read for Boom {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "boom"))
+            }
+        }
+        let cut = dir.join("test-cut.exe");
+        assert!(save_verified(Boom, &cut, &sha, 0, |_| {}).is_err());
+        assert!(!cut.exists());
+
+        let _ = std::fs::remove_file(&good);
+    }
 }

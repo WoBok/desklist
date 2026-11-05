@@ -21,6 +21,7 @@ Desk List 在桌面上呈现一张常驻的任务卡片。它不占用任务栏�
 - **托盘菜单** —— 显示、置顶、恢复到桌面、退出
 - **分类与归档** —— 勾选的项目进入该分类的已完成列表，可在其中恢复或删除；归档后清空
 - **拖动排序** —— 按住任意一条上下拖动，顺序随列表一起保存
+- **自动更新** —— 设置面板底部出现「更新到 x.y.z」，点一下静默下载、校验、替换并自动重启
 - **宽度可调** —— 拖动右边缘，320–520 px
 - **界面语言** —— 默认跟随系统（中文 / English），设置里可切换，托盘菜单同步
 - **本地存储** —— 单个 JSON 文件；无账号、无同步、无遥测
@@ -42,6 +43,15 @@ npx tauri build            # → src-tauri/target/release/desklist.exe
 ```
 
 安装包由 `installer/setup.nsi` 生成。
+
+发版时额外生成一份更新清单，并作为 Release 附件上传：
+
+```bash
+node scripts/make-updater-json.mjs --version x.y.z   # → updater.json
+gh release upload vx.y.z updater.json
+```
+
+客户端读的是 `releases/latest/download/updater.json`；仓库根目录那份同名文件只作为 jsDelivr 兜底（有缓存延迟）。
 
 ## 说明
 

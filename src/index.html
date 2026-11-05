@@ -767,6 +767,19 @@ select.sel:hover{border-color:#D5D2C8}
 .pfoot .ver{font-size:9.5px;color:var(--ink-6);letter-spacing:.2px}
 /* 作者名比版本号再重一档，让人一眼看出这是署名而不是产品名的一部分 */
 .pfoot .ver .auth{color:var(--ink-4);font-weight:500}
+/* 更新入口：和版本号同一行、同字号，没更新时 display:none 不占位。
+   刻意不做成按钮：这张页脚上一个凸起的方块会把「恢复默认」的层级打乱。
+   只有一条细下划线表示可点，下载进度也在这同一行原地变，布局不动。 */
+.pfoot .upd{
+  display:none;font-family:inherit;font-size:9.5px;letter-spacing:.2px;line-height:1.15;
+  background:none;border:0;border-bottom:1px solid rgba(60,119,103,.38);border-radius:0;
+  padding:0 0 1px;margin:0 2px 0 0;color:var(--ink-4);white-space:nowrap;
+  cursor:pointer;transition:color .13s ease,border-color .13s ease;
+}
+.pfoot .upd.on{display:inline-block}
+.pfoot .upd:hover{background:none;color:var(--ink);border-bottom-color:var(--ink-4)}
+.pfoot .upd[disabled]{cursor:default;color:var(--ink-6);border-bottom-color:transparent}
+.pfoot .upd[disabled]:hover{color:var(--ink-6)}
 </style>
 </head>
 <body data-tone="white">
@@ -799,7 +812,8 @@ select.sel:hover{border-color:#D5D2C8}
       <div class="pfoot">
         <button data-act="resetPrefs" id="resetBtn"></button>
         <span class="sp"></span>
-        <span class="ver"><span class="auth">WoBok</span> · Desk List <span id="verNum">1.5.5</span></span>
+        <button class="upd" id="upd" data-act="update" disabled></button>
+        <span class="ver"><span class="auth">WoBok</span> · Desk List <span id="verNum">1.6.0</span></span>
       </div>
     </div>
   </div>
@@ -857,7 +871,9 @@ const I18N = {
     secKeys:"快捷键", hkPin:"置顶 / 贴回桌面", hkPinHint:"点一下再按新的组合",
     hkAdd:"直接新建一条",
     secBehaviour:"行为", autostart:"开机自动启动", autostartHint:"登录后静默贴到桌面",
-    backToDesktop:"贴回桌面", backHint:"置顶态下按一下就行"
+    backToDesktop:"贴回桌面", backHint:"置顶态下按一下就行",
+    updTo:"更新到 {v}", updDown:"下载中 {p}%", updInstall:"正在安装…",
+    updFail:"更新失败 · 重试", updNoHash:"更新包缺少校验值，已放弃"
   },
   en: {
     addItem:"Add item", newTab:"New", settingsTitle:"Settings", resetPrefs:"Reset",
@@ -897,7 +913,9 @@ const I18N = {
     secKeys:"Shortcuts", hkPin:"Pin / unpin", hkPinHint:"Click, then press the new combination",
     hkAdd:"New item",
     secBehaviour:"Behaviour", autostart:"Start with Windows", autostartHint:"Appears on the desktop silently after sign-in",
-    backToDesktop:"Back to desktop", backHint:"One press while pinned"
+    backToDesktop:"Back to desktop", backHint:"One press while pinned",
+    updTo:"Update to {v}", updDown:"Downloading {p}%", updInstall:"Installing…",
+    updFail:"Update failed · retry", updNoHash:"Update is missing its checksum"
   }
 };
 let LANG = "zh";
@@ -1779,6 +1797,11 @@ document.addEventListener("click", e=>{
       S.prefs = {...DEFAULT_PREFS};
       applyPrefs(); applyShortcuts(); renderSettings(); render(); save(); return;
     }
+    case "update": {
+      if(UPD.state === "ready") updDownload();
+      else if(UPD.state === "error"){ UPD.state = "idle"; updPaint(); updCheck(true); }
+      return;
+    }
     /* 每一项都立刻落盘：设置面板没有「确定」按钮，改了就该生效并记住 */
     case "lang": {
       S.prefs.lang = arg; setLang(S.prefs);
@@ -2339,6 +2362,9 @@ function openSettings(){
     document.body.classList.toggle("panel-left", side === "left");
     document.body.classList.add("settings");
     renderSettings();
+    /* 打开设置才查一次：这个面板是唯一会显示版本的地方，
+       没必要让它在后台常驻轮询。十分钟内查过就跳过。 */
+    updCheck(false);
     invoke("enter_settings", { side, pw });
 
     /* 面板高度按内容定；窗口高度取「卡片 / 面板」里更高的那个，只往下长，不挪位置 */
@@ -2591,11 +2617,83 @@ if(S.cardW && S.cardW !== 380){
 }
 setTimeout(()=>{ reportHeight(); updateHints(); updateTabOverflow(); }, 80);
 
+/* ═══════════ 自动更新 ═══════════
+   不引 Tauri 的 updater：它要的载荷是 bundler 出的 nsis.zip，跟我们这份自写
+   NSIS 安装包不是同一套安装布局，装上会变成两份。这里直接吃 GitHub Release。
+
+   整条链在 Rust：GitHub 的资产域名不带 CORS 头，WebView 里 fetch 会被拦掉，
+   所以清单、安装包、哈希校验都在 Rust 做，前端只管把状态显示成一行字。 */
+const UPD_GAP = 10 * 60 * 1000;   /* 十分钟内不重复去查 */
+
+let APP_VER = "";
+const UPD = { state:"idle", info:null, pct:0, at:0, busy:false };
+
+/* 下载进度由 Rust 每 1% 发一次，只在「正在下」时理会 */
+listen("upd-progress", p=>{
+  if(UPD.state !== "downloading") return;
+  const n = Math.max(0, Math.min(99, p | 0));
+  if(n !== UPD.pct){ UPD.pct = n; updPaint(); }
+});
+
+/* 状态只有这几种，页脚那一行永远只显示当前状态的一句话 */
+function updPaint(){
+  const el = document.getElementById("upd");
+  if(!el) return;
+  const st = UPD.state;
+  const show = st === "ready" || st === "downloading" || st === "installing" || st === "error";
+  el.classList.toggle("on", show);
+  el.disabled = st === "downloading" || st === "installing";
+  let txt = "";
+  if(st === "ready") txt = t("updTo", { v: UPD.info ? UPD.info.version : "" });
+  else if(st === "downloading") txt = t("updDown", { p: UPD.pct });
+  else if(st === "installing") txt = t("updInstall");
+  else if(st === "error") txt = t("updFail");
+  if(el.textContent !== txt) el.textContent = txt;
+}
+
+async function updCheck(force){
+  if(!HAS_T || !APP_VER || UPD.busy) return;
+  if(!force && Date.now() - UPD.at < UPD_GAP) return;
+  UPD.at = Date.now();
+  let info = null;
+  try{ info = await invoke("update_check"); }catch(e){ info = null; }
+  /* 没更新、连不上、清单不合法 —— 全都不出声。页脚不该为了「一切正常」多一条字 */
+  if(!info || !info.version) return;
+  UPD.info = info;
+  UPD.state = "ready";
+  updPaint();
+  requestAnimationFrame(fitPanel);
+}
+
+async function updDownload(){
+  if(!HAS_T || !UPD.info || UPD.busy) return;
+  UPD.busy = true;
+  UPD.state = "downloading"; UPD.pct = 0; updPaint();
+  try{
+    const path = await invoke("update_download", {
+      url: UPD.info.url, version: UPD.info.version, sha256: UPD.info.sha256
+    });
+    if(!path) throw new Error("download failed");
+    UPD.state = "installing"; updPaint();
+    /* 这一步之后进程就没了：安装包会先 taskkill 再覆盖，装完自己启动 */
+    await invoke("update_run", { path });
+  }catch(e){
+    UPD.busy = false;
+    UPD.state = "error";
+    updPaint();
+    requestAnimationFrame(fitPanel);
+  }
+}
+
 /* 页脚版本号从 Rust 的 CARGO_PKG_VERSION 取，前端不再手写 ——
-   以前每发一版都要记得改这里，1.5.4 / 1.5.5 都漏过。 */
+   以前每发一版都要记得改这里，1.5.4 / 1.5.5 都漏过。
+   拿到版本才知道该跟谁比，所以检查和它串在一起。 */
 invoke("app_version").then(v=>{
+  if(typeof v === "string" && v.trim()) APP_VER = v.trim();
   const el = document.getElementById("verNum");
-  if(el && typeof v === "string" && v.trim()) el.textContent = v.trim();
+  if(el && APP_VER) el.textContent = APP_VER;
+  /* 启动后错开几秒再查：别和首帧渲染、吸附对位抢时间 */
+  if(APP_VER) setTimeout(()=>updCheck(false), 3500);
 });
 </script>
 </body>

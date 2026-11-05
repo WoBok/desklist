@@ -6,7 +6,7 @@
 
 !define APP      "DeskList"
 !define APPNAME  "Desk List"
-!define VER      "1.5.16"
+!define VER      "1.6.0"
 !define EXE      "DeskList.exe"
 !define REGUN    "Software\Microsoft\Windows\CurrentVersion\Uninstall\DeskList"
 !define REGAPP   "Software\DeskList"
@@ -19,7 +19,7 @@ InstallDirRegKey HKCU "${REGAPP}" "InstallDir"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
-VIProductVersion "1.5.16.0"
+VIProductVersion "1.6.0.0"
 VIAddVersionKey "ProductName"     "Desk List"
 VIAddVersionKey "FileDescription" "Desk List 桌面待办清单"
 VIAddVersionKey "FileVersion"     "${VER}"
@@ -78,6 +78,12 @@ Section "install"
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKCU "${REGUN}" "EstimatedSize" "$0"
+
+  ; 静默安装 = 应用内自动更新。装完自己把新版本拉起来，用户只看到窗口闪一下。
+  ; GUI 安装不能走这里 —— 完成页那个「启动 Desk List」勾选会再启一次。
+  ${If} ${Silent}
+    Exec "$INSTDIR\${EXE}"
+  ${EndIf}
 SectionEnd
 
 Section "Uninstall"
