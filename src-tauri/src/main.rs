@@ -1241,9 +1241,7 @@ fn newer(a: &str, b: &str) -> bool {
 }
 
 /* 返回 None = 没有更新，或者压根没查到。两种情况前端都不出声。 */
-#[tauri::command]
-fn update_check() -> Option<UpdInfo> {
-    let cur = env!("CARGO_PKG_VERSION");
+fn check_manifest(cur: &str) -> Option<UpdInfo> {
     let client = http(15).ok()?;
     for src in UPD_MANIFEST {
         let body: serde_json::Value = match client.get(src).send().and_then(|r| r.json()) {
@@ -1274,6 +1272,11 @@ fn update_check() -> Option<UpdInfo> {
         return Some(UpdInfo { version, url, sha256, size });
     }
     None
+}
+
+#[tauri::command]
+fn update_check() -> Option<UpdInfo> {
+    check_manifest(env!("CARGO_PKG_VERSION"))
 }
 
 /* 边收边算哈希：全部收完才比对，对不上就把文件删掉，绝不留半截货 */
@@ -2177,5 +2180,23 @@ mod upd_tests {
         assert!(!cut.exists());
 
         let _ = std::fs::remove_file(&good);
+    }
+
+    /* 真连一次线上清单：TLS、302 跟随、JSON 解析、版本比较整条链都过一遍。
+       依赖网络的测试不放进默认 cargo test，要跑就：cargo test live_ -- --ignored */
+    #[test]
+    #[ignore]
+    fn live_manifest_matches_the_published_release() {
+        let got = check_manifest("1.0.0").expect("应该读到线上 updater.json");
+        println!("线上清单：{} {}", got.version, got.url);
+        assert!(got.url.starts_with("https://github.com/WoBok/desklist/releases/download/"));
+        assert!(
+            got.url.ends_with(&format!("/DeskList-Setup-{}.exe", got.version)),
+            "清单里的文件名必须和实际资产同名：{}",
+            got.url
+        );
+        assert_eq!(got.sha256.len(), 64);
+        /* 同一个版本不该再报更新 */
+        assert!(check_manifest(&got.version).is_none());
     }
 }
