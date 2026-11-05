@@ -608,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "desklist"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "core-graphics 0.23.2",
  "reqwest 0.12.28",
